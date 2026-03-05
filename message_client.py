@@ -48,7 +48,11 @@ def load_config() -> dict:
 CFG      = load_config()
 HOST     = CFG["server_host"]
 PORT     = CFG["server_port"]
-USERNAME = os.environ.get("USERNAME", os.getlogin())
+import getpass
+try:
+    USERNAME = os.environ.get("USERNAME") or os.getlogin()
+except OSError:
+    USERNAME = getpass.getuser()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -161,13 +165,14 @@ class MessageInput(QTextEdit):
 
 class PopupNotification(QDialog):
     acknowledged  = pyqtSignal(int)      # message_id
-    reply_clicked = pyqtSignal(str)      # sender username
+    reply_clicked = pyqtSignal(str, str) # sender username, group_name
 
     def __init__(self, sender: str, content: str, msg_id: int,
                  group_name: str = None, parent=None):
         super().__init__(parent)
         self.msg_id = msg_id
         self.sender = sender
+        self.group_name = group_name
 
         self.setWindowTitle("New Message")
         self.setWindowFlags(
@@ -243,7 +248,7 @@ class PopupNotification(QDialog):
 
     def _reply(self):
         self.acknowledged.emit(self.msg_id)
-        self.reply_clicked.emit(self.sender)
+        self.reply_clicked.emit(self.sender, self.group_name)
         self.close()
 
 
@@ -437,7 +442,7 @@ class MainWindow(QMainWindow):
         self.chat_is_group = True
         self.chat_header.setText(f"👥  Group: {grp}")
         self.send_btn.setEnabled(True)
-        self.chat_view.clear()
+        self.ws.send({"type": "history_request", "with_group": grp})
 
     # ── sending ──────────────────────────────────────────────
 
@@ -530,11 +535,12 @@ class MainWindow(QMainWindow):
         msg_id    = data["id"]
         grp       = data.get("group_name")
         ts        = data.get("timestamp", "")
-        time_str  = ""
-        try:
-            time_str = datetime.fromisoformat(ts).strftime("%H:%M")
-        except Exception:
-            pass
+        time_str  = datetime.now().strftime("%H:%M")
+        if ts:
+            try:
+                time_str = datetime.fromisoformat(ts).strftime("%H:%M")
+            except Exception:
+                pass
 
         # Is the user currently looking at this conversation?
         viewing = (
@@ -552,13 +558,21 @@ class MainWindow(QMainWindow):
         self.chat_view.clear()
         for m in data.get("messages", []):
             mine = m["sender"] == USERNAME
-            ts = ""
-            try:
-                ts = datetime.fromisoformat(m["timestamp"]).strftime("%H:%M")
-            except Exception:
-                pass
-            name = "You" if mine else m["sender"]
-            self._bubble(name, m["content"], ts, mine=mine, status=m.get("status",""))
+            ts = data.get("timestamp", "")
+            time_str = datetime.now().strftime("%H:%M")
+            if ts:
+                try:
+                    time_str = datetime.fromisoformat(ts).strftime("%H:%M")
+                except Exception:
+                    pass
+            
+            grp = m.get("group_name")
+            if grp and not mine:
+               name = f"{m['sender']} ({grp})"
+            else:
+               name = "You" if mine else m["sender"]
+
+            self._bubble(name, m["content"], time_str, mine=mine, status=m.get("status",""))
 
     # ── chat bubbles ─────────────────────────────────────────
 
@@ -609,13 +623,22 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information, 5000,
         )
 
-    def _jump_to(self, username: str):
-        for i in range(self.user_list.count()):
-            it = self.user_list.item(i)
-            if it.data(Qt.ItemDataRole.UserRole) == username:
-                self.user_list.setCurrentItem(it)
-                self._pick_user(it)
-                break
+    def _jump_to(self, username: str, group_name: str = None):
+        if group_name:
+            for i in range(self.group_list.count()):
+                it = self.group_list.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == group_name:
+                    self.group_list.setCurrentItem(it)
+                    self._pick_group(it)
+                    break
+        else:
+            for i in range(self.user_list.count()):
+                it = self.user_list.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == username:
+                    self.user_list.setCurrentItem(it)
+                    self._pick_user(it)
+                    break
+
         self._raise()
         self.msg_input.setFocus()
 

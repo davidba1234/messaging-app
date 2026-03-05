@@ -1,3 +1,11 @@
+
+# Virtual environments and caches
+venv/
+__pycache__/
+
+# Secrets and credentials
+PAT.txt
 .env
 
-PAT.txt
+# Local databases
+messenger.db

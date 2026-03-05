@@ -47,18 +47,23 @@ def init_database():
         CREATE TABLE IF NOT EXISTS messages (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             sender       TEXT NOT NULL,
-            recipient    TEXT NOT NULL,
             group_name   TEXT DEFAULT NULL,
             content      TEXT NOT NULL,
-            timestamp    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status       TEXT DEFAULT 'sent'
+            timestamp    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS message_recipients (
+            msg_id       INTEGER NOT NULL,
+            recipient    TEXT NOT NULL,
+            status       TEXT DEFAULT 'sent',
+            FOREIGN KEY(msg_id) REFERENCES messages(id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_msg_recipient
-            ON messages(recipient, status);
+            ON message_recipients(recipient, status);
 
         CREATE INDEX IF NOT EXISTS idx_msg_conversation
-            ON messages(sender, recipient, timestamp);
+            ON messages(sender, timestamp);
     """)
     conn.commit()
     conn.close()
@@ -83,22 +88,32 @@ def db_all_users() -> list[str]:
     return [r["username"] for r in rows]
 
 
-def db_save_message(sender: str, recipient: str, content: str,
+def db_save_message(sender: str, recipients: list[str], content: str,
                     group_name: Optional[str] = None) -> int:
     conn = get_db()
+    now = datetime.now().isoformat()
     cur = conn.execute("""
-        INSERT INTO messages (sender, recipient, content, group_name, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-    """, (sender, recipient, content, group_name, datetime.now().isoformat()))
+        INSERT INTO messages (sender, group_name, content, timestamp)
+        VALUES (?, ?, ?, ?)
+    """, (sender, group_name, content, now))
     msg_id = cur.lastrowid
+    
+    conn.executemany("""
+        INSERT INTO message_recipients (msg_id, recipient, status)
+        VALUES (?, ?, 'sent')
+    """, [(msg_id, r) for r in recipients])
+    
     conn.commit()
     conn.close()
     return msg_id
 
 
-def db_update_status(message_id: int, status: str):
+def db_update_status(message_id: int, status: str, recipient: Optional[str] = None):
     conn = get_db()
-    conn.execute("UPDATE messages SET status = ? WHERE id = ?", (status, message_id))
+    if recipient:
+        conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ? AND recipient = ?", (status, message_id, recipient))
+    else:
+        conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ?", (status, message_id))
     conn.commit()
     conn.close()
 
@@ -113,9 +128,11 @@ def db_get_message(message_id: int) -> Optional[dict]:
 def db_get_undelivered(username: str) -> list[dict]:
     conn = get_db()
     rows = conn.execute("""
-        SELECT * FROM messages
-        WHERE recipient = ? AND status = 'sent'
-        ORDER BY timestamp
+        SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+        FROM messages m
+        JOIN message_recipients r ON m.id = r.msg_id
+        WHERE r.recipient = ? AND r.status = 'sent'
+        ORDER BY m.timestamp
     """, (username,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -124,12 +141,27 @@ def db_get_undelivered(username: str) -> list[dict]:
 def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]:
     conn = get_db()
     rows = conn.execute("""
-        SELECT * FROM messages
-        WHERE ((sender=? AND recipient=?) OR (sender=? AND recipient=?))
-          AND group_name IS NULL
-        ORDER BY timestamp DESC
+        SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+        FROM messages m
+        JOIN message_recipients r ON m.id = r.msg_id
+        WHERE ((m.sender=? AND r.recipient=?) OR (m.sender=? AND r.recipient=?))
+          AND m.group_name IS NULL
+        ORDER BY m.timestamp DESC
         LIMIT ?
     """, (user1, user2, user2, user1, limit)).fetchall()
+    conn.close()
+    return [dict(r) for r in reversed(rows)]
+
+
+def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT id, sender, group_name, content, timestamp
+        FROM messages
+        WHERE group_name = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """, (group_name, limit)).fetchall()
     conn.close()
     return [dict(r) for r in reversed(rows)]
 
@@ -221,7 +253,7 @@ class ConnectionManager:
                 "timestamp":  msg["timestamp"],
             })
             if ok:
-                db_update_status(msg["id"], "delivered")
+                db_update_status(msg["id"], "delivered", username)
                 await self.send_to(msg["sender"], {
                     "type":       "status_update",
                     "message_id": msg["id"],
@@ -261,6 +293,10 @@ async def ws_endpoint(websocket: WebSocket, username: str):
     except WebSocketDisconnect:
         await mgr.disconnect(username)
     except Exception as exc:
+        try:
+           await websocket.send_json({"type": "error", "message": "Invalid format or error"})
+        except Exception:
+           pass
         print(f"[!] Error ({username}): {exc}")
         await mgr.disconnect(username)
 
@@ -292,10 +328,12 @@ async def _handle_message(sender: str, data: dict):
     if group_name:
         # ── Group message → fan-out ──
         members = resolve_group_members(group_name)
-        for member in members:
-            if member == sender:
-                continue
-            msg_id = db_save_message(sender, member, content, group_name)
+        recipients = [m for m in members if m != sender]
+        if not recipients:
+             return
+             
+        msg_id = db_save_message(sender, recipients, content, group_name)
+        for member in recipients:
             ok = await mgr.send_to(member, {
                 "type": "message", "id": msg_id,
                 "sender": sender, "recipient": member,
@@ -303,7 +341,7 @@ async def _handle_message(sender: str, data: dict):
                 "timestamp": datetime.now().isoformat(),
             })
             if ok:
-                db_update_status(msg_id, "delivered")
+                db_update_status(msg_id, "delivered", member)
 
         await mgr.send_to(sender, {
             "type": "message_sent", "group_name": group_name, "status": "sent"
@@ -311,7 +349,7 @@ async def _handle_message(sender: str, data: dict):
 
     elif recipient:
         # ── Direct message ──
-        msg_id = db_save_message(sender, recipient, content)
+        msg_id = db_save_message(sender, [recipient], content)
         ok = await mgr.send_to(recipient, {
             "type": "message", "id": msg_id,
             "sender": sender, "recipient": recipient,
@@ -319,7 +357,7 @@ async def _handle_message(sender: str, data: dict):
             "timestamp": datetime.now().isoformat(),
         })
         status = "delivered" if ok else "sent"
-        db_update_status(msg_id, status)
+        db_update_status(msg_id, status, recipient)
         await mgr.send_to(sender, {
             "type": "message_sent", "message_id": msg_id,
             "recipient": recipient, "status": status,
@@ -330,7 +368,7 @@ async def _handle_ack(sender: str, data: dict):
     msg_id = data.get("message_id")
     if not msg_id:
         return
-    db_update_status(msg_id, "acknowledged")
+    db_update_status(msg_id, "acknowledged", sender)
     msg = db_get_message(msg_id)
     if msg:
         await mgr.send_to(msg["sender"], {
@@ -342,6 +380,15 @@ async def _handle_ack(sender: str, data: dict):
 
 
 async def _handle_history(sender: str, data: dict):
+    group = data.get("with_group")
+    if group:
+        await mgr.send_to(sender, {
+            "type":       "history_response",
+            "with_group": group,
+            "messages":   db_get_group_history(group),
+        })
+        return
+
     other = data.get("with_user")
     if not other:
         return
