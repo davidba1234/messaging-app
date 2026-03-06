@@ -240,7 +240,7 @@ class PopupNotification(QDialog):
         self.setStyleSheet(
             "QDialog{background:white;border:2px solid #1a73e8;border-radius:10px;}"
         )
-        QTimer.singleShot(CFG.get("popup_duration_ms", 15000), self.close)
+        #QTimer.singleShot(CFG.get("popup_duration_ms", 15000), self.close)
 
     def _ack(self):
         self.acknowledged.emit(self.msg_id)

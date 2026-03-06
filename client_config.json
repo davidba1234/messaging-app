@@ -1,5 +1,4 @@
 {
-    "server_host": "127.0.0.1",
-    "server_port": 8765,
-    "popup_duration_ms": 15000
+    "server_host": "192.168.0.109",
+    "server_port": 8765
 }
