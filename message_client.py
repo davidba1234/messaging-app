@@ -30,24 +30,8 @@ import websocket  # pip install websocket-client
 # Configuration
 # ═══════════════════════════════════════════════════════════════
 
-CONFIG_FILE = Path(__file__).parent / "client_config.json"
-
-def load_config() -> dict:
-    defaults = {
-        "server_host": "192.168.1.100",   # ← CHANGE THIS
-        "server_port": 8765,
-        "popup_duration_ms": 15000,
-    }
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            defaults.update(json.load(f))
-    else:
-        CONFIG_FILE.write_text(json.dumps(defaults, indent=2))
-    return defaults
-
-CFG      = load_config()
-HOST     = CFG["server_host"]
-PORT     = CFG["server_port"]
+HOST = "192.168.0.109"  # ← CHANGE THIS IP if the server moves
+PORT = 8765
 import getpass
 try:
     USERNAME = os.environ.get("USERNAME") or os.getlogin()
@@ -497,7 +481,7 @@ class MainWindow(QMainWindow):
         elif t == "message_sent":
             st = data.get("status", "sent")
             if st == "delivered":
-                label = "✓✓ Delivered"
+                label = "✓✓ Sent but not yet seen"
             elif st == "queued":
                 label = "📥 Queued (recipient offline)"
             elif st == "acknowledged":
@@ -509,7 +493,7 @@ class MainWindow(QMainWindow):
         elif t == "status_update":
             by = data.get("acknowledged_by", "")
             st = data.get("status", "")
-            icons = {"delivered": "✓✓ Delivered",
+            icons = {"delivered": "✓✓ Sent but not yet seen",
                      "acknowledged": f"✅ Acknowledged by {by}"}
             self.status.setText(icons.get(st, st))
 
@@ -530,6 +514,11 @@ class MainWindow(QMainWindow):
             on = u in self.online_users
             it = QListWidgetItem(f" {'🟢' if on else '⚪'}  {u}")
             it.setData(Qt.ItemDataRole.UserRole, u)
+            if not on:
+                it.setForeground(QColor("#a0a0a0"))
+                font = it.font()
+                font.setItalic(True)
+                it.setFont(font)
             self.user_list.addItem(it)
             if u == sel:
                 it.setSelected(True)
@@ -670,8 +659,8 @@ class MainWindow(QMainWindow):
     def _raise(self):
         self.show()
         if self.isMinimized():
+            self.setWindowState(Qt.WindowState.WindowNoState)
             self.showNormal()
-        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
         self.activateWindow()
         self.raise_()
 

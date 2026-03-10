@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  messenger_server:
+    build: .
+    container_name: messenger_server
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./messenger.db:/app/messenger.db
+      - ./groups.json:/app/groups.json
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8765
