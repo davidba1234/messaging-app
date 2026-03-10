@@ -246,7 +246,7 @@ class PopupNotification(QDialog):
     def _ack(self):
         self.acknowledged.emit(self.msg_id)
         if self.main_window:
-            self.main_window.select_contact(self.sender)
+            self.main_window.select_contact(self.sender, activate=False)
         self.close()
 
     def _reply(self):
@@ -553,13 +553,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Is the user currently looking at this conversation?
+        # Is the user currently looking at this conversation AND is the app active/focused?
         viewing = (
             (not grp and self.current_chat == sender and not self.chat_is_group)
             or (grp and self.current_chat == grp and self.chat_is_group)
         )
 
-        if viewing and self.isVisible() and self.isActiveWindow():
+        if viewing and self.isVisible() and self.isActiveWindow() and not self.isMinimized():
             self._bubble(sender, content, time_str, mine=False)
             self.ws.send({"type": "acknowledge", "message_id": msg_id})
         else:
@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
             QSystemTrayIcon.MessageIcon.Information, 5000,
         )
 
-    def select_contact(self, username):
+    def select_contact(self, username, activate=True):
         """Select a contact in the list and load their conversation."""
         for i in range(self.user_list.count()):
             item = self.user_list.item(i)
@@ -642,9 +642,9 @@ class MainWindow(QMainWindow):
                 self.user_list.setCurrentItem(item)
                 self._pick_user(item)
                 break
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        
+        if activate:
+            self._raise()
 
     def _jump_to(self, username: str, group_name: str = None):
         if group_name:
@@ -669,7 +669,9 @@ class MainWindow(QMainWindow):
 
     def _raise(self):
         self.show()
-        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        if self.isMinimized():
+            self.showNormal()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
         self.activateWindow()
         self.raise_()
 
