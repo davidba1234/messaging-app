@@ -168,11 +168,12 @@ class PopupNotification(QDialog):
     reply_clicked = pyqtSignal(str, str) # sender username, group_name
 
     def __init__(self, sender: str, content: str, msg_id: int,
-                 group_name: str = None, parent=None):
+                 group_name: str = None, parent=None, main_window=None):
         super().__init__(parent)
         self.msg_id = msg_id
         self.sender = sender
         self.group_name = group_name
+        self.main_window = main_window
 
         self.setWindowTitle("New Message")
         self.setWindowFlags(
@@ -244,6 +245,8 @@ class PopupNotification(QDialog):
 
     def _ack(self):
         self.acknowledged.emit(self.msg_id)
+        if self.main_window:
+            self.main_window.select_contact(self.sender)
         self.close()
 
     def _reply(self):
@@ -493,7 +496,15 @@ class MainWindow(QMainWindow):
 
         elif t == "message_sent":
             st = data.get("status", "sent")
-            self.status.setText(f"{'✓' if st=='sent' else '✓✓'}  Message {st}")
+            if st == "delivered":
+                label = "✓✓ Delivered"
+            elif st == "queued":
+                label = "📥 Queued (recipient offline)"
+            elif st == "acknowledged":
+                label = "✅ Acknowledged"
+            else:
+                label = "✓ Sent"
+            self.status.setText(label)
 
         elif t == "status_update":
             by = data.get("acknowledged_by", "")
@@ -581,7 +592,7 @@ class MainWindow(QMainWindow):
         bg    = "#1a73e8" if mine else "#e8eaed"
         fg    = "white"   if mine else "#333"
         align = "right"   if mine else "left"
-        st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅"}.get(status,"")
+        st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")
         safe  = html.escape(text).replace("\n", "<br>")
 
         self.chat_view.append(f"""
@@ -601,7 +612,7 @@ class MainWindow(QMainWindow):
     # ── popup notifications ──────────────────────────────────
 
     def _popup(self, sender, content, msg_id, grp):
-        pop = PopupNotification(sender, content, msg_id, grp)
+        pop = PopupNotification(sender, content, msg_id, grp, main_window=self)
         pop.acknowledged.connect(
             lambda mid: self.ws.send({"type": "acknowledge", "message_id": mid})
         )
@@ -622,6 +633,18 @@ class MainWindow(QMainWindow):
             content[:150],
             QSystemTrayIcon.MessageIcon.Information, 5000,
         )
+
+    def select_contact(self, username):
+        """Select a contact in the list and load their conversation."""
+        for i in range(self.user_list.count()):
+            item = self.user_list.item(i)
+            if item.text() == username or item.data(Qt.ItemDataRole.UserRole) == username:
+                self.user_list.setCurrentItem(item)
+                self._pick_user(item)
+                break
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _jump_to(self, username: str, group_name: str = None):
         if group_name:

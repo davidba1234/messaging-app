@@ -131,7 +131,7 @@ def db_get_undelivered(username: str) -> list[dict]:
         SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
         FROM messages m
         JOIN message_recipients r ON m.id = r.msg_id
-        WHERE r.recipient = ? AND r.status = 'sent'
+        WHERE r.recipient = ? AND r.status IN ('sent', 'queued')
         ORDER BY m.timestamp
     """, (username,)).fetchall()
     conn.close()
@@ -356,7 +356,7 @@ async def _handle_message(sender: str, data: dict):
             "group_name": None, "content": content,
             "timestamp": datetime.now().isoformat(),
         })
-        status = "delivered" if ok else "sent"
+        status = "delivered" if ok else "queued"
         db_update_status(msg_id, status, recipient)
         await mgr.send_to(sender, {
             "type": "message_sent", "message_id": msg_id,
