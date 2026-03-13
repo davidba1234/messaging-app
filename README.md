@@ -1,18 +1,3 @@
-Here's the corrected README. Run:
-
-
-
-```batch
-
-notepad C:\\OfficeMessenger\\README.md
-
-```
-
-
-
-Delete everything, paste this, save:
-
-
 
 ```markdown
 
