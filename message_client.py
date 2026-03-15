@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QTextBrowser, QTextEdit, QPushButton,
     QLabel, QSystemTrayIcon, QMenu, QSplitter, QMessageBox, QDialog,
-    QFrame,
+    QFrame, QLineEdit, QFormLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt6.QtGui import (
@@ -30,13 +30,53 @@ import websocket  # pip install websocket-client
 # Configuration
 # ═══════════════════════════════════════════════════════════════
 
-HOST = "192.168.0.109"  # ← CHANGE THIS IP if the server moves
-PORT = 8765
+import configparser
+
+CONFIG_FILE = Path.home() / "messenger_config.ini"
+
+def load_config() -> str:
+    if not CONFIG_FILE.exists():
+        return ""
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    return config.get("Server", "host", fallback="")
+
+def save_config(host: str):
+    config = configparser.ConfigParser()
+    config["Server"] = {"host": host}
+    with open(CONFIG_FILE, "w") as f:
+        config.write(f)
+
 import getpass
 try:
     USERNAME = os.environ.get("USERNAME") or os.getlogin()
 except OSError:
     USERNAME = getpass.getuser()
+
+HOST = load_config()
+PORT = 8765
+
+class ConfigDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Messenger Configuration")
+        self.setFixedSize(350, 150)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Welcome to Office Messenger!\nPlease enter the Server IP Address to connect."))
+        
+        form = QFormLayout()
+        self.ip_input = QLineEdit()
+        self.ip_input.setPlaceholderText("e.g. 192.168.0.109")
+        form.addRow("Server IP:", self.ip_input)
+        layout.addLayout(form)
+        
+        btn = QPushButton("Save && Connect")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
+
+    def get_ip(self) -> str:
+        return self.ip_input.text().strip()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -601,6 +641,17 @@ class MainWindow(QMainWindow):
     # ── popup notifications ──────────────────────────────────
 
     def _popup(self, sender, content, msg_id, grp):
+        self.tray.showMessage(
+            f"Message from {sender}" + (f" ({grp})" if grp else ""),
+            content[:150],
+            QSystemTrayIcon.MessageIcon.Information, 5000,
+        )
+
+        if len(self.popups) >= 3:
+            # We already have 3 popups, just acknowledge silently for the UI
+            # to prevent freezing, or leave it in the tray.
+            return
+            
         pop = PopupNotification(sender, content, msg_id, grp, main_window=self)
         pop.acknowledged.connect(
             lambda mid: self.ws.send({"type": "acknowledge", "message_id": mid})
@@ -608,7 +659,7 @@ class MainWindow(QMainWindow):
         pop.reply_clicked.connect(self._jump_to)
 
         screen = QApplication.primaryScreen().availableGeometry()
-        offset = len(self.popups) * 10
+        offset = len(self.popups) * (pop.sizeHint().height() + 10)
         pop.move(screen.right() - pop.width() - 20,
                  screen.bottom() - pop.sizeHint().height() - 20 - offset)
         pop.show()
@@ -616,12 +667,6 @@ class MainWindow(QMainWindow):
             self.popups.remove(pop) if pop in self.popups else None
         ))
         self.popups.append(pop)
-
-        self.tray.showMessage(
-            f"Message from {sender}" + (f" ({grp})" if grp else ""),
-            content[:150],
-            QSystemTrayIcon.MessageIcon.Information, 5000,
-        )
 
     def select_contact(self, username, activate=True):
         """Select a contact in the list and load their conversation."""
@@ -688,6 +733,18 @@ if __name__ == "__main__":
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Office Messenger")
     app.setStyle("Fusion")
+
+    if not HOST:
+        dialog = ConfigDialog()
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_host = dialog.get_ip()
+            if new_host:
+                save_config(new_host)
+                HOST = new_host
+            else:
+                sys.exit(0)
+        else:
+            sys.exit(0)
 
     win = MainWindow()
     win.show()

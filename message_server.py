@@ -6,10 +6,13 @@ Run on your always-on server: python server.py
 
 import json
 import sqlite3
+import aiosqlite
 import html
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import logging
+from logging.handlers import TimedRotatingFileHandler
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -24,6 +27,18 @@ GROUPS_FILE   = Path(__file__).parent / "groups.json"
 HOST = "0.0.0.0"      # Listen on all interfaces
 PORT = 8765
 
+# Configure logging
+LOG_FILE = Path(__file__).parent / "server.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        TimedRotatingFileHandler(LOG_FILE, when="D", interval=1, backupCount=7),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Database Layer
@@ -34,6 +49,10 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+async def get_db_async():
+    conn = await aiosqlite.connect(str(DATABASE_PATH))
+    conn.row_factory = aiosqlite.Row
+    return conn
 
 def init_database():
     conn = get_db()
@@ -67,103 +86,100 @@ def init_database():
     """)
     conn.commit()
     conn.close()
-    print(f"[DB] Initialized at {DATABASE_PATH}")
+    logger.info(f"[DB] Initialized at {DATABASE_PATH}")
 
 
-def db_register_user(username: str):
-    conn = get_db()
-    now = datetime.now().isoformat()
-    conn.execute("""
-        INSERT INTO users (username, last_seen) VALUES (?, ?)
-        ON CONFLICT(username) DO UPDATE SET last_seen = ?
-    """, (username, now, now))
-    conn.commit()
-    conn.close()
+async def db_register_user(username: str):
+    async with await get_db_async() as conn:
+        now = datetime.now().isoformat()
+        await conn.execute("""
+            INSERT INTO users (username, last_seen) VALUES (?, ?)
+            ON CONFLICT(username) DO UPDATE SET last_seen = ?
+        """, (username, now, now))
+        await conn.commit()
 
 
-def db_all_users() -> list[str]:
-    conn = get_db()
-    rows = conn.execute("SELECT username FROM users ORDER BY username").fetchall()
-    conn.close()
-    return [r["username"] for r in rows]
+async def db_all_users() -> list[str]:
+    async with await get_db_async() as conn:
+        async with conn.execute("SELECT username FROM users ORDER BY username") as cursor:
+            rows = await cursor.fetchall()
+            return [r["username"] for r in rows]
 
 
-def db_save_message(sender: str, recipients: list[str], content: str,
+async def db_save_message(sender: str, recipients: list[str], content: str,
                     group_name: Optional[str] = None) -> int:
-    conn = get_db()
-    now = datetime.now().isoformat()
-    cur = conn.execute("""
-        INSERT INTO messages (sender, group_name, content, timestamp)
-        VALUES (?, ?, ?, ?)
-    """, (sender, group_name, content, now))
-    msg_id = cur.lastrowid
-    
-    conn.executemany("""
-        INSERT INTO message_recipients (msg_id, recipient, status)
-        VALUES (?, ?, 'sent')
-    """, [(msg_id, r) for r in recipients])
-    
-    conn.commit()
-    conn.close()
-    return msg_id
+    async with await get_db_async() as conn:
+        now = datetime.now().isoformat()
+        cursor = await conn.execute("""
+            INSERT INTO messages (sender, group_name, content, timestamp)
+            VALUES (?, ?, ?, ?)
+        """, (sender, group_name, content, now))
+        msg_id = cursor.lastrowid
+        
+        await conn.executemany("""
+            INSERT INTO message_recipients (msg_id, recipient, status)
+            VALUES (?, ?, 'sent')
+        """, [(msg_id, r) for r in recipients])
+        
+        await conn.commit()
+        return msg_id
 
 
-def db_update_status(message_id: int, status: str, recipient: Optional[str] = None):
-    conn = get_db()
-    if recipient:
-        conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ? AND recipient = ?", (status, message_id, recipient))
-    else:
-        conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ?", (status, message_id))
-    conn.commit()
-    conn.close()
+async def db_update_status(message_id: int, status: str, recipient: Optional[str] = None):
+    async with await get_db_async() as conn:
+        if recipient:
+            await conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ? AND recipient = ?", (status, message_id, recipient))
+        else:
+            await conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ?", (status, message_id))
+        await conn.commit()
 
 
-def db_get_message(message_id: int) -> Optional[dict]:
-    conn = get_db()
-    row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+async def db_get_message(message_id: int) -> Optional[dict]:
+    async with await get_db_async() as conn:
+        async with conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 
-def db_get_undelivered(username: str) -> list[dict]:
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
-        FROM messages m
-        JOIN message_recipients r ON m.id = r.msg_id
-        WHERE r.recipient = ? AND r.status IN ('sent', 'queued')
-        ORDER BY m.timestamp
-    """, (username,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+async def db_get_undelivered(username: str) -> list[dict]:
+    async with await get_db_async() as conn:
+        async with conn.execute("""
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+            FROM messages m
+            JOIN message_recipients r ON m.id = r.msg_id
+            WHERE r.recipient = ? AND r.status IN ('sent', 'queued')
+            ORDER BY m.timestamp
+        """, (username,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
 
 
-def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]:
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
-        FROM messages m
-        JOIN message_recipients r ON m.id = r.msg_id
-        WHERE ((m.sender=? AND r.recipient=?) OR (m.sender=? AND r.recipient=?))
-          AND m.group_name IS NULL
-        ORDER BY m.timestamp DESC
-        LIMIT ?
-    """, (user1, user2, user2, user1, limit)).fetchall()
-    conn.close()
-    return [dict(r) for r in reversed(rows)]
+async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]:
+    async with await get_db_async() as conn:
+        async with conn.execute("""
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+            FROM messages m
+            JOIN message_recipients r ON m.id = r.msg_id
+            WHERE ((m.sender=? AND r.recipient=?) OR (m.sender=? AND r.recipient=?))
+              AND m.group_name IS NULL
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+        """, (user1, user2, user2, user1, limit)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in reversed(rows)]
 
 
-def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT id, sender, group_name, content, timestamp
-        FROM messages
-        WHERE group_name = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    """, (group_name, limit)).fetchall()
-    conn.close()
-    return [dict(r) for r in reversed(rows)]
+async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
+    async with await get_db_async() as conn:
+        async with conn.execute("""
+            SELECT id, sender, group_name, content, timestamp
+            FROM messages
+            WHERE group_name = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (group_name, limit)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in reversed(rows)]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -182,13 +198,13 @@ def load_groups() -> dict:
     return json.loads(GROUPS_FILE.read_text())
 
 
-def resolve_group_members(group_name: str) -> list[str]:
+async def resolve_group_members(group_name: str) -> list[str]:
     groups = load_groups()
     if group_name not in groups:
         return []
     members = groups[group_name]
     if "*" in members:
-        return db_all_users()      # Everyone
+        return await db_all_users()      # Everyone
     return members
 
 
@@ -204,15 +220,26 @@ class ConnectionManager:
 
     async def connect(self, username: str, ws: WebSocket):
         await ws.accept()
+        
+        # Check for multiple logins
+        if username in self.active:
+            old_ws = self.active[username]
+            try:
+                await old_ws.send_json({"type": "error", "message": "Logged in from another location"})
+                await old_ws.close()
+            except Exception:
+                pass
+            logger.info(f"[!] Closed older connection for {username}")
+        
         self.active[username] = ws
-        db_register_user(username)
-        print(f"[+] {username} connected  ({len(self.active)} online)")
+        await db_register_user(username)
+        logger.info(f"[+] {username} connected  ({len(self.active)} online)")
         await self.broadcast_user_list()
         await self._flush_queue(username)
 
     async def disconnect(self, username: str):
         self.active.pop(username, None)
-        print(f"[-] {username} disconnected  ({len(self.active)} online)")
+        logger.info(f"[-] {username} disconnected  ({len(self.active)} online)")
         await self.broadcast_user_list()
 
     # ── send helpers ─────────────────────────────────────────
@@ -228,10 +255,11 @@ class ConnectionManager:
         return False
 
     async def broadcast_user_list(self):
+        all_users = await db_all_users()
         payload = {
             "type":         "user_list",
             "online_users": list(self.active.keys()),
-            "all_users":    db_all_users(),
+            "all_users":    all_users,
             "groups":       list(load_groups().keys()),
         }
         for ws in list(self.active.values()):
@@ -242,7 +270,8 @@ class ConnectionManager:
 
     async def _flush_queue(self, username: str):
         """Push every undelivered message to a user who just came online."""
-        for msg in db_get_undelivered(username):
+        undelivered = await db_get_undelivered(username)
+        for msg in undelivered:
             ok = await self.send_to(username, {
                 "type":       "message",
                 "id":         msg["id"],
@@ -253,7 +282,7 @@ class ConnectionManager:
                 "timestamp":  msg["timestamp"],
             })
             if ok:
-                db_update_status(msg["id"], "delivered", username)
+                await db_update_status(msg["id"], "delivered", username)
                 await self.send_to(msg["sender"], {
                     "type":       "status_update",
                     "message_id": msg["id"],
@@ -275,7 +304,7 @@ app = FastAPI(title="Office Messenger Server")
 async def startup():
     init_database()
     load_groups()
-    print(f"Server listening on {HOST}:{PORT}")
+    logger.info(f"Server listening on {HOST}:{PORT}")
 
 
 @app.get("/health")
@@ -297,7 +326,7 @@ async def ws_endpoint(websocket: WebSocket, username: str):
            await websocket.send_json({"type": "error", "message": "Invalid format or error"})
         except Exception:
            pass
-        print(f"[!] Error ({username}): {exc}")
+        logger.exception(f"[!] Error ({username}): {exc}")
         await mgr.disconnect(username)
 
 
@@ -327,12 +356,12 @@ async def _handle_message(sender: str, data: dict):
 
     if group_name:
         # ── Group message → fan-out ──
-        members = resolve_group_members(group_name)
+        members = await resolve_group_members(group_name)
         recipients = [m for m in members if m != sender]
         if not recipients:
              return
              
-        msg_id = db_save_message(sender, recipients, content, group_name)
+        msg_id = await db_save_message(sender, recipients, content, group_name)
         for member in recipients:
             ok = await mgr.send_to(member, {
                 "type": "message", "id": msg_id,
@@ -341,7 +370,7 @@ async def _handle_message(sender: str, data: dict):
                 "timestamp": datetime.now().isoformat(),
             })
             if ok:
-                db_update_status(msg_id, "delivered", member)
+                await db_update_status(msg_id, "delivered", member)
 
         await mgr.send_to(sender, {
             "type": "message_sent", "group_name": group_name, "status": "sent"
@@ -349,7 +378,7 @@ async def _handle_message(sender: str, data: dict):
 
     elif recipient:
         # ── Direct message ──
-        msg_id = db_save_message(sender, [recipient], content)
+        msg_id = await db_save_message(sender, [recipient], content)
         ok = await mgr.send_to(recipient, {
             "type": "message", "id": msg_id,
             "sender": sender, "recipient": recipient,
@@ -357,7 +386,7 @@ async def _handle_message(sender: str, data: dict):
             "timestamp": datetime.now().isoformat(),
         })
         status = "delivered" if ok else "queued"
-        db_update_status(msg_id, status, recipient)
+        await db_update_status(msg_id, status, recipient)
         await mgr.send_to(sender, {
             "type": "message_sent", "message_id": msg_id,
             "recipient": recipient, "status": status,
@@ -368,8 +397,8 @@ async def _handle_ack(sender: str, data: dict):
     msg_id = data.get("message_id")
     if not msg_id:
         return
-    db_update_status(msg_id, "acknowledged", sender)
-    msg = db_get_message(msg_id)
+    await db_update_status(msg_id, "acknowledged", sender)
+    msg = await db_get_message(msg_id)
     if msg:
         await mgr.send_to(msg["sender"], {
             "type": "status_update",
@@ -382,20 +411,22 @@ async def _handle_ack(sender: str, data: dict):
 async def _handle_history(sender: str, data: dict):
     group = data.get("with_group")
     if group:
+        history = await db_get_group_history(group)
         await mgr.send_to(sender, {
             "type":       "history_response",
             "with_group": group,
-            "messages":   db_get_group_history(group),
+            "messages":   history,
         })
         return
 
     other = data.get("with_user")
     if not other:
         return
+    history = await db_get_history(sender, other)
     await mgr.send_to(sender, {
         "type":      "history_response",
         "with_user": other,
-        "messages":  db_get_history(sender, other),
+        "messages":  history,
     })
 
 
