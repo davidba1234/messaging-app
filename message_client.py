@@ -189,6 +189,7 @@ class MessageInput(QTextEdit):
 
 class PopupNotification(QDialog):
     acknowledged  = pyqtSignal(int)      # message_id
+    typing_reply  = pyqtSignal(int)      # message_id
     reply_clicked = pyqtSignal(str, str) # sender username, group_name
 
     def __init__(self, sender: str, content: str, msg_id: int,
@@ -274,7 +275,7 @@ class PopupNotification(QDialog):
         self.close()
 
     def _reply(self):
-        self.acknowledged.emit(self.msg_id)
+        self.typing_reply.emit(self.msg_id)
         self.reply_clicked.emit(self.sender, self.group_name)
         self.close()
 
@@ -534,7 +535,8 @@ class MainWindow(QMainWindow):
             by = data.get("acknowledged_by", "")
             st = data.get("status", "")
             icons = {"delivered": "✓✓ Sent but not yet seen",
-                     "acknowledged": f"✅ Acknowledged by {by}"}
+                     "acknowledged": f"✅ Acknowledged by {by}",
+                     "typing_reply": f"✍️ {by} is typing a reply"}
             self.status.setText(icons.get(st, st))
 
         elif t == "history_response":
@@ -655,6 +657,9 @@ class MainWindow(QMainWindow):
         pop = PopupNotification(sender, content, msg_id, grp, main_window=self)
         pop.acknowledged.connect(
             lambda mid: self.ws.send({"type": "acknowledge", "message_id": mid})
+        )
+        pop.typing_reply.connect(
+            lambda mid: self.ws.send({"type": "typing_reply", "message_id": mid})
         )
         pop.reply_clicked.connect(self._jump_to)
 

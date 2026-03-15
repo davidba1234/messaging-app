@@ -343,6 +343,9 @@ async def route(sender: str, data: dict):
     elif t == "acknowledge":
         await _handle_ack(sender, data)
 
+    elif t == "typing_reply":
+        await _handle_typing_reply(sender, data)
+
     elif t == "history_request":
         await _handle_history(sender, data)
 
@@ -404,6 +407,21 @@ async def _handle_ack(sender: str, data: dict):
             "type": "status_update",
             "message_id": msg_id,
             "status": "acknowledged",
+            "acknowledged_by": sender,
+        })
+
+
+async def _handle_typing_reply(sender: str, data: dict):
+    msg_id = data.get("message_id")
+    if not msg_id:
+        return
+    await db_update_status(msg_id, "acknowledged", sender)
+    msg = await db_get_message(msg_id)
+    if msg:
+        await mgr.send_to(msg["sender"], {
+            "type": "status_update",
+            "message_id": msg_id,
+            "status": "typing_reply",
             "acknowledged_by": sender,
         })
 
