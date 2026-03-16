@@ -1,0 +1,10 @@
+# UI Framework
+PyQt6==6.6.1
+
+# Networking & WebSockets
+websocket-client==1.7.0
+
+# Optional: Dictation / Speech Recognition
+# (Requires system-level portaudio to be installed)
+SpeechRecognition==3.10.1
+PyAudio==0.2.14
