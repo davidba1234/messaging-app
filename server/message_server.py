@@ -50,9 +50,7 @@ def get_db():
     return conn
 
 def get_db_async():
-    conn = aiosqlite.connect(str(DATABASE_PATH))
-    conn.row_factory = aiosqlite.Row
-    return conn
+    return aiosqlite.connect(str(DATABASE_PATH))
 
 def init_database():
     conn = get_db()
@@ -91,6 +89,7 @@ def init_database():
 
 async def db_register_user(username: str):
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         now = datetime.now().isoformat()
         await conn.execute("""
             INSERT INTO users (username, last_seen) VALUES (?, ?)
@@ -101,6 +100,7 @@ async def db_register_user(username: str):
 
 async def db_all_users() -> list[str]:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         async with conn.execute("SELECT username FROM users ORDER BY username") as cursor:
             rows = await cursor.fetchall()
             return [r["username"] for r in rows]
@@ -109,6 +109,7 @@ async def db_all_users() -> list[str]:
 async def db_save_message(sender: str, recipients: list[str], content: str,
                     group_name: Optional[str] = None) -> int:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         now = datetime.now().isoformat()
         cursor = await conn.execute("""
             INSERT INTO messages (sender, group_name, content, timestamp)
@@ -127,6 +128,7 @@ async def db_save_message(sender: str, recipients: list[str], content: str,
 
 async def db_update_status(message_id: int, status: str, recipient: Optional[str] = None):
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         if recipient:
             await conn.execute("UPDATE message_recipients SET status = ? WHERE msg_id = ? AND recipient = ?", (status, message_id, recipient))
         else:
@@ -136,6 +138,7 @@ async def db_update_status(message_id: int, status: str, recipient: Optional[str
 
 async def db_get_message(message_id: int) -> Optional[dict]:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         async with conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -143,6 +146,7 @@ async def db_get_message(message_id: int) -> Optional[dict]:
 
 async def db_get_undelivered(username: str) -> list[dict]:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         async with conn.execute("""
             SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
             FROM messages m
@@ -156,6 +160,7 @@ async def db_get_undelivered(username: str) -> list[dict]:
 
 async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         async with conn.execute("""
             SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
             FROM messages m
@@ -171,6 +176,7 @@ async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]
 
 async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
     async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
         async with conn.execute("""
             SELECT id, sender, group_name, content, timestamp
             FROM messages
