@@ -4,6 +4,7 @@
 PAT.txt
 .env
 env/
+GitPAT.txt
 
 
 # Byte-compiled / optimized / DLL files

@@ -600,11 +600,11 @@ class MainWindow(QMainWindow):
         self.chat_view.clear()
         for m in data.get("messages", []):
             mine = m["sender"] == USERNAME
-            ts = data.get("timestamp", "")
-            time_str = datetime.now().strftime("%H:%M")
+            ts = m.get("timestamp", "")
+            time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             if ts:
                 try:
-                    time_str = datetime.fromisoformat(ts).strftime("%H:%M")
+                    time_str = datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M")
                 except Exception:
                     pass
             
@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
 
     def _bubble(self, name: str, text: str, time_str: str,
                 mine: bool, status: str = ""):
-        bg    = "#1a73e8" if mine else "#e8eaed"
+        bg    = "#555555" if mine else "#e8eaed"
         fg    = "white"   if mine else "#333"
         align = "right"   if mine else "left"
         st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")

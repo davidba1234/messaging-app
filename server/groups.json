@@ -2,6 +2,9 @@
   "Everyone": [
     "*"
   ],
-  "Management": [],
+  "Management": [
+    "david",
+    "ander"
+  ],
   "Sales": []
 }
