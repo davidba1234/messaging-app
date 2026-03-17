@@ -5,8 +5,7 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - ./messenger.db:/app/messenger.db
-      - ./groups.json:/app/groups.json
+      - .:/app
     restart: unless-stopped
     environment:
       - HOST=0.0.0.0
