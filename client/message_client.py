@@ -461,6 +461,7 @@ class MainWindow(QMainWindow):
         dot = "🟢" if user in self.online_users else "⚪"
         self.chat_header.setText(f"{dot}  Chat with {user}")
         self.send_btn.setEnabled(True)
+        self.status.setText("")
         self.ws.send({"type": "history_request", "with_user": user})
 
     def _pick_group(self, item: QListWidgetItem):
@@ -470,6 +471,7 @@ class MainWindow(QMainWindow):
         self.chat_is_group = True
         self.chat_header.setText(f"👥  Group: {grp}")
         self.send_btn.setEnabled(True)
+        self.status.setText("")
         self.ws.send({"type": "history_request", "with_group": grp})
 
     # ── sending ──────────────────────────────────────────────
@@ -534,6 +536,11 @@ class MainWindow(QMainWindow):
         elif t == "status_update":
             by = data.get("acknowledged_by", "")
             st = data.get("status", "")
+            
+            # Don't show status update if viewing another direct chat
+            if by and not self.chat_is_group and self.current_chat != by:
+                return
+
             icons = {"delivered": "✓✓ Sent but not yet seen",
                      "acknowledged": f"✅ Acknowledged by {by}",
                      "typing_reply": f"✍️ {by} is typing a reply"}
@@ -592,6 +599,8 @@ class MainWindow(QMainWindow):
 
         if viewing:
             self._bubble(sender, content, time_str, mine=False)
+            if self.status.text() == f"✍️ {sender} is typing a reply":
+                self.status.setText("")
             
         self._popup(sender, content, msg_id, grp)
 
