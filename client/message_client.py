@@ -601,10 +601,10 @@ class MainWindow(QMainWindow):
         for m in data.get("messages", []):
             mine = m["sender"] == USERNAME
             ts = m.get("timestamp", "")
-            time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
             if ts:
                 try:
-                    time_str = datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M")
+                    time_str = datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
                 except Exception:
                     pass
             
