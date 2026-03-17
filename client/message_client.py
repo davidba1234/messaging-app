@@ -590,11 +590,10 @@ class MainWindow(QMainWindow):
             or (grp and self.current_chat == grp and self.chat_is_group)
         )
 
-        if viewing and self.isVisible() and self.isActiveWindow() and not self.isMinimized():
+        if viewing:
             self._bubble(sender, content, time_str, mine=False)
-            self.ws.send({"type": "acknowledge", "message_id": msg_id})
-        else:
-            self._popup(sender, content, msg_id, grp)
+            
+        self._popup(sender, content, msg_id, grp)
 
     def _show_history(self, data: dict):
         self.chat_view.clear()
