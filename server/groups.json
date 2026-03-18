@@ -1,10 +1,14 @@
 {
-  "Everyone": [
-    "*"
+  "Doctors": [
+    "david", "andrew", "hielke", "jess", "joshua", "laurens", "lorna", "maura", "roland", "suea", "suzie", "vicky", "preet"
   ],
+
   "Management": [
     "david",
     "ander"
   ],
-  "Sales": []
+
+  "nurses": ["nurse", "officenurse", "barbara", "dana", "rienie"],
+  "Admin": []
 }
+
