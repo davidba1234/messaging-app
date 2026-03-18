@@ -58,7 +58,7 @@ except OSError:
 COMPUTER_NAME = socket.gethostname()
 
 # The unique technical ID for the server
-UNIQUE_ID = f"{USERNAME}@{COMPUTER_NAME}"
+UNIQUE_ID = f"{USERNAME}|{COMPUTER_NAME}"
 
 HOST = load_config()
 PORT = 8765
@@ -568,9 +568,9 @@ class MainWindow(QMainWindow):
             if full_id == UNIQUE_ID:
                 continue
             
-            # Split "nurses@ROOM-101" into ["nurses", "ROOM-101"]
-            if "@" in full_id:
-                name, room = full_id.split("@", 1)
+            # Split "nurses|ROOM-101" into ["nurses", "ROOM-101"]
+            if "|" in full_id:
+                name, room = full_id.split("|", 1)
                 display_text = f"{name} ({room})"
             else:
                 display_text = full_id # Fallback for old/simple IDs
@@ -597,8 +597,8 @@ class MainWindow(QMainWindow):
 
     def _on_incoming(self, data: dict):
         sender_raw = data["sender"]
-        if "@" in sender_raw:
-            sender_display, room = sender_raw.split("@", 1)
+        if "|" in sender_raw:
+            sender_display, room = sender_raw.split("|", 1)
             sender_name = f"{sender_display} ({room})"
         else:
             sender_name = sender_raw
@@ -641,8 +641,8 @@ class MainWindow(QMainWindow):
             
             grp = m.get("group_name")
             sender_raw = m["sender"]
-            if "@" in sender_raw:
-                sender_display, room = sender_raw.split("@", 1)
+            if "|" in sender_raw:
+                sender_display, room = sender_raw.split("|", 1)
                 sender_name = f"{sender_display} ({room})"
             else:
                 sender_name = sender_raw

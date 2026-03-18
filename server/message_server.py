@@ -19,6 +19,17 @@ import uvicorn
 
 
 # ═══════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════
+
+def get_logic_id(full_id: str) -> str:
+    """Converts 'nurses|ROOM-101' -> 'nurses'"""
+    if not full_id:
+        return full_id
+    return full_id.split('|')[0] if '|' in full_id else full_id
+
+
+# ═══════════════════════════════════════════════════════════════
 # Configuration
 # ═══════════════════════════════════════════════════════════════
 
@@ -207,7 +218,8 @@ async def resolve_group_members(group_name: str) -> list[str]:
         return []
     members = groups[group_name]
     if "*" in members:
-        return await db_all_users()      # Everyone
+        all_users = await db_all_users()
+        return list(set(get_logic_id(u) for u in all_users))      # Everyone
     return members
 
 
@@ -257,6 +269,17 @@ class ConnectionManager:
                 return False
         return False
 
+    async def send_to_logic(self, logic_id: str, payload: dict) -> bool:
+        sent = False
+        for full_id, ws in list(self.active.items()):
+            if get_logic_id(full_id) == logic_id:
+                try:
+                    await ws.send_json(payload)
+                    sent = True
+                except Exception:
+                    pass
+        return sent
+
     async def broadcast_user_list(self):
         all_users = await db_all_users()
         payload = {
@@ -273,7 +296,8 @@ class ConnectionManager:
 
     async def _flush_queue(self, username: str):
         """Push every undelivered message to a user who just came online."""
-        undelivered = await db_get_undelivered(username)
+        logic_user = get_logic_id(username)
+        undelivered = await db_get_undelivered(logic_user)
         for msg in undelivered:
             ok = await self.send_to(username, {
                 "type":       "message",
@@ -285,8 +309,8 @@ class ConnectionManager:
                 "timestamp":  msg["timestamp"],
             })
             if ok:
-                await db_update_status(msg["id"], "delivered", username)
-                await self.send_to(msg["sender"], {
+                await db_update_status(msg["id"], "delivered", logic_user)
+                await self.send_to_logic(msg["sender"], {
                     "type":       "status_update",
                     "message_id": msg["id"],
                     "status":     "delivered",
@@ -360,44 +384,49 @@ async def _handle_message(sender: str, data: dict):
     if not content:
         return
 
+    logic_sender = get_logic_id(sender)
+
     if group_name:
         current_groups = get_groups()
         if group_name in current_groups:
             # ── Group message → fan-out ──
             members = await resolve_group_members(group_name)
-        recipients = [m for m in members if m != sender]
-        if not recipients:
-             return
-             
-        msg_id = await db_save_message(sender, recipients, content, group_name)
-        for member in recipients:
-            ok = await mgr.send_to(member, {
-                "type": "message", "id": msg_id,
-                "sender": sender, "recipient": member,
-                "group_name": group_name, "content": content,
-                "timestamp": datetime.now().isoformat(),
-            })
-            if ok:
-                await db_update_status(msg_id, "delivered", member)
+            recipients = [m for m in members if m != logic_sender]
+            if not recipients:
+                 return
+                 
+            msg_id = await db_save_message(logic_sender, recipients, content, group_name)
+            for member in recipients:
+                ok = await mgr.send_to_logic(member, {
+                    "type": "message", "id": msg_id,
+                    "sender": sender,
+                    "recipient": member,
+                    "group_name": group_name, "content": content,
+                    "timestamp": datetime.now().isoformat(),
+                })
+                if ok:
+                    await db_update_status(msg_id, "delivered", member)
 
-        await mgr.send_to(sender, {
-            "type": "message_sent", "group_name": group_name, "status": "sent"
-        })
+            await mgr.send_to(sender, {
+                "type": "message_sent", "group_name": group_name, "status": "sent"
+            })
 
     elif recipient:
         # ── Direct message ──
-        msg_id = await db_save_message(sender, [recipient], content)
-        ok = await mgr.send_to(recipient, {
+        logic_recipient = get_logic_id(recipient)
+        msg_id = await db_save_message(logic_sender, [logic_recipient], content)
+        ok = await mgr.send_to_logic(logic_recipient, {
             "type": "message", "id": msg_id,
-            "sender": sender, "recipient": recipient,
+            "sender": sender,
+            "recipient": logic_recipient,
             "group_name": None, "content": content,
             "timestamp": datetime.now().isoformat(),
         })
         status = "delivered" if ok else "queued"
-        await db_update_status(msg_id, status, recipient)
+        await db_update_status(msg_id, status, logic_recipient)
         await mgr.send_to(sender, {
             "type": "message_sent", "message_id": msg_id,
-            "recipient": recipient, "status": status,
+            "recipient": logic_recipient, "status": status,
         })
 
 
@@ -405,14 +434,15 @@ async def _handle_ack(sender: str, data: dict):
     msg_id = data.get("message_id")
     if not msg_id:
         return
-    await db_update_status(msg_id, "acknowledged", sender)
+    logic_sender = get_logic_id(sender)
+    await db_update_status(msg_id, "acknowledged", logic_sender)
     msg = await db_get_message(msg_id)
     if msg:
-        await mgr.send_to(msg["sender"], {
+        await mgr.send_to_logic(msg["sender"], {
             "type": "status_update",
             "message_id": msg_id,
             "status": "acknowledged",
-            "acknowledged_by": sender,
+            "acknowledged_by": logic_sender,
         })
 
 
@@ -420,18 +450,20 @@ async def _handle_typing_reply(sender: str, data: dict):
     msg_id = data.get("message_id")
     if not msg_id:
         return
-    await db_update_status(msg_id, "acknowledged", sender)
+    logic_sender = get_logic_id(sender)
+    await db_update_status(msg_id, "acknowledged", logic_sender)
     msg = await db_get_message(msg_id)
     if msg:
-        await mgr.send_to(msg["sender"], {
+        await mgr.send_to_logic(msg["sender"], {
             "type": "status_update",
             "message_id": msg_id,
             "status": "typing_reply",
-            "acknowledged_by": sender,
+            "acknowledged_by": logic_sender,
         })
 
 
 async def _handle_history(sender: str, data: dict):
+    logic_user = get_logic_id(sender)
     group = data.get("with_group")
     if group:
         current_groups = get_groups()
@@ -447,7 +479,8 @@ async def _handle_history(sender: str, data: dict):
     other = data.get("with_user")
     if not other:
         return
-    history = await db_get_history(sender, other)
+    logic_other = get_logic_id(other)
+    history = await db_get_history(logic_user, logic_other)
     await mgr.send_to(sender, {
         "type":      "history_response",
         "with_user": other,
