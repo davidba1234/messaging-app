@@ -192,20 +192,17 @@ async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
 # Groups (loaded from JSON config file)
 # ═══════════════════════════════════════════════════════════════
 
-def load_groups() -> dict:
-    if not GROUPS_FILE.exists():
-        default = {
-            "Everyone": ["*"],
-            "Management": [],
-            "Sales": []
-        }
-        GROUPS_FILE.write_text(json.dumps(default, indent=2))
-        return default
-    return json.loads(GROUPS_FILE.read_text())
+def get_groups():
+    try:
+        with open(GROUPS_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error reading groups: {e}")
+        return {}
 
 
 async def resolve_group_members(group_name: str) -> list[str]:
-    groups = load_groups()
+    groups = get_groups()
     if group_name not in groups:
         return []
     members = groups[group_name]
@@ -266,7 +263,7 @@ class ConnectionManager:
             "type":         "user_list",
             "online_users": list(self.active.keys()),
             "all_users":    all_users,
-            "groups":       list(load_groups().keys()),
+            "groups":       list(get_groups().keys()),
         }
         for ws in list(self.active.values()):
             try:
@@ -309,7 +306,7 @@ app = FastAPI(title="Office Messenger Server")
 @app.on_event("startup")
 async def startup():
     init_database()
-    load_groups()
+    get_groups()
     logger.info(f"Server listening on {HOST}:{PORT}")
 
 
@@ -364,8 +361,10 @@ async def _handle_message(sender: str, data: dict):
         return
 
     if group_name:
-        # ── Group message → fan-out ──
-        members = await resolve_group_members(group_name)
+        current_groups = get_groups()
+        if group_name in current_groups:
+            # ── Group message → fan-out ──
+            members = await resolve_group_members(group_name)
         recipients = [m for m in members if m != sender]
         if not recipients:
              return
@@ -435,12 +434,14 @@ async def _handle_typing_reply(sender: str, data: dict):
 async def _handle_history(sender: str, data: dict):
     group = data.get("with_group")
     if group:
-        history = await db_get_group_history(group)
-        await mgr.send_to(sender, {
-            "type":       "history_response",
-            "with_group": group,
-            "messages":   history,
-        })
+        current_groups = get_groups()
+        if group in current_groups:
+            history = await db_get_group_history(group)
+            await mgr.send_to(sender, {
+                "type":       "history_response",
+                "with_group": group,
+                "messages":   history,
+            })
         return
 
     other = data.get("with_user")

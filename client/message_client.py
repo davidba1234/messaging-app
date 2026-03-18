@@ -9,6 +9,7 @@ import os
 import json
 import html
 import time
+import socket
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,12 @@ try:
 except OSError:
     USERNAME = getpass.getuser()
 
+# Get the Windows Computer Name (e.g., "SURGERY-PC")
+COMPUTER_NAME = socket.gethostname()
+
+# The unique technical ID for the server
+UNIQUE_ID = f"{USERNAME}@{COMPUTER_NAME}"
+
 HOST = load_config()
 PORT = 8765
 
@@ -94,7 +101,7 @@ class WebSocketThread(QThread):
         self._running = True
 
     def run(self):
-        url = f"ws://{HOST}:{PORT}/ws/{USERNAME}"
+        url = f"ws://{HOST}:{PORT}/ws/{UNIQUE_ID}"
         while self._running:
             try:
                 self._ws = websocket.WebSocketApp(
@@ -557,19 +564,29 @@ class MainWindow(QMainWindow):
         sel = self.current_chat if not self.chat_is_group else None
 
         self.user_list.clear()
-        for u in sorted(self.all_users):
-            if u == USERNAME:
+        for full_id in sorted(self.all_users):
+            if full_id == UNIQUE_ID:
                 continue
-            on = u in self.online_users
-            it = QListWidgetItem(f" {'🟢' if on else '⚪'}  {u}")
-            it.setData(Qt.ItemDataRole.UserRole, u)
+            
+            # Split "nurses@ROOM-101" into ["nurses", "ROOM-101"]
+            if "@" in full_id:
+                name, room = full_id.split("@", 1)
+                display_text = f"{name} ({room})"
+            else:
+                display_text = full_id # Fallback for old/simple IDs
+
+            on = full_id in self.online_users
+            it = QListWidgetItem(f" {'🟢' if on else '⚪'}  {display_text}")
+            it.setData(Qt.ItemDataRole.UserRole, full_id)
+            
             if not on:
                 it.setForeground(QColor("#a0a0a0"))
                 font = it.font()
                 font.setItalic(True)
                 it.setFont(font)
+                
             self.user_list.addItem(it)
-            if u == sel:
+            if full_id == sel:
                 it.setSelected(True)
 
         self.group_list.clear()
@@ -579,7 +596,13 @@ class MainWindow(QMainWindow):
             self.group_list.addItem(it)
 
     def _on_incoming(self, data: dict):
-        sender    = data["sender"]
+        sender_raw = data["sender"]
+        if "@" in sender_raw:
+            sender_display, room = sender_raw.split("@", 1)
+            sender_name = f"{sender_display} ({room})"
+        else:
+            sender_name = sender_raw
+
         content   = data["content"]
         msg_id    = data["id"]
         grp       = data.get("group_name")
@@ -593,21 +616,21 @@ class MainWindow(QMainWindow):
 
         # Is the user currently looking at this conversation AND is the app active/focused?
         viewing = (
-            (not grp and self.current_chat == sender and not self.chat_is_group)
+            (not grp and self.current_chat == sender_raw and not self.chat_is_group)
             or (grp and self.current_chat == grp and self.chat_is_group)
         )
 
         if viewing:
-            self._bubble(sender, content, time_str, mine=False)
-            if self.status.text() == f"✍️ {sender} is typing a reply":
+            self._bubble(sender_name, content, time_str, mine=False)
+            if self.status.text() == f"✍️ {sender_raw} is typing a reply":
                 self.status.setText("")
             
-        self._popup(sender, content, msg_id, grp)
+        self._popup(sender_raw, content, msg_id, grp)
 
     def _show_history(self, data: dict):
         self.chat_view.clear()
         for m in data.get("messages", []):
-            mine = m["sender"] == USERNAME
+            mine = m["sender"] == UNIQUE_ID
             ts = m.get("timestamp", "")
             time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
             if ts:
@@ -617,10 +640,17 @@ class MainWindow(QMainWindow):
                     pass
             
             grp = m.get("group_name")
-            if grp and not mine:
-               name = f"{m['sender']} ({grp})"
+            sender_raw = m["sender"]
+            if "@" in sender_raw:
+                sender_display, room = sender_raw.split("@", 1)
+                sender_name = f"{sender_display} ({room})"
             else:
-               name = "You" if mine else m["sender"]
+                sender_name = sender_raw
+
+            if grp and not mine:
+               name = f"{sender_name} ({grp})"
+            else:
+               name = "You" if mine else sender_name
 
             self._bubble(name, m["content"], time_str, mine=mine, status=m.get("status",""))
 
@@ -628,8 +658,8 @@ class MainWindow(QMainWindow):
 
     def _bubble(self, name: str, text: str, time_str: str,
                 mine: bool, status: str = ""):
-        bg    = "#555555" if mine else "#e8eaed"
-        fg    = "white"   if mine else "#333"
+        bg    = "#4caf50" if mine else "#d4edda"
+        fg    = "white"   if mine else "black"
         align = "right"   if mine else "left"
         st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")
         safe  = html.escape(text).replace("\n", "<br>")
@@ -651,11 +681,11 @@ class MainWindow(QMainWindow):
     # ── popup notifications ──────────────────────────────────
 
     def _popup(self, sender, content, msg_id, grp):
-        self.tray.showMessage(
-            f"Message from {sender}" + (f" ({grp})" if grp else ""),
-            content[:150],
-            QSystemTrayIcon.MessageIcon.Information, 5000,
-        )
+        # self.tray.showMessage(
+        #     f"Message from {sender}" + (f" ({grp})" if grp else ""),
+        #     content[:150],
+        #     QSystemTrayIcon.MessageIcon.Information, 5000,
+        # )
 
         if len(self.popups) >= 3:
             # We already have 3 popups, just acknowledge silently for the UI

@@ -1,0 +1,61 @@
+This guide covers your full workflow from your local machine to the work VM and back again, ensuring you don't lose your internet connection along the way.
+Phase 1: On your Local Machine (david@nuc)Open your terminal.Start the NetBird Service (if not already running):Bash
+
+sudo systemctl start netbird
+
+Connect to the VPN with the DNS fix:This ensures you can access work servers without losing Google/General Internet.Bash
+
+sudo netbird up --disable-dns
+
+Verify the Connection:Check that you can see the work network and that your local internet still works.Bash
+
+netbird status
+
+ping -c 2 8.8.8.8
+
+Phase 2: Connecting to the Work VMSSH into the VM:Use the specific port and internal IP we identified earlier.Bash
+
+ssh -p 2270 david@10.0.1.247
+
+Perform your Work:You can now run your sync script or check the server status:Bash
+
+messenger-sync
+sudo docker ps
+
+Phase 3: Returning to nuc and Shutting DownExit the VM:This brings you back to your local terminal prompt (david@nuc).Bash
+
+exit
+
+Disconnect NetBird:This stops the VPN tunnel and releases the virtual network interface.Bash
+sudo netbird down
+
+Stop the NetBird Daemon (Optional):If you want to ensure no background NetBird processes are running at all:Bash
+
+sudo systemctl stop netbird
+
+Summary ChecklistActionCommandResultStart VPNsudo netbird up --disable-dnsWork network accessible.Loginssh -p 2270 david@10.0.1.247Now on the Debian 13 VM.LogoutexitBack on your Mint machine.Stop VPNsudo netbird downFull local network isolation.
+
+TO update VM after changes:
+
+This script handles the Git update, builds the Docker image (in case you changed the requirements.txt), and restarts the container.
+
+Bash
+#!/bin/bash
+# Move to the server directory
+cd /opt/office-messenger/server || exit
+
+echo "--- Pulling latest changes from GitHub ---"
+sudo git pull origin main
+
+echo "--- Rebuilding and restarting Docker container ---"
+sudo docker compose up -d --build
+
+echo "--- Current Status ---"
+sudo docker ps | grep messenger_server
+
+echo "--- Sync Complete ---"
+
+Now, whenever you finish making changes at home and push them to GitHub, you just need to type this on your work VM:
+
+
+messenger-sync
