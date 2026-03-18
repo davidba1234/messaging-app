@@ -74,6 +74,7 @@ class ConfigDialog(QDialog):
         
         form = QFormLayout()
         self.ip_input = QLineEdit()
+        self.ip_input.setText("messenger.katimed.co.nz")
         self.ip_input.setPlaceholderText("e.g. 192.168.0.109")
         form.addRow("Server IP:", self.ip_input)
         layout.addLayout(form)
