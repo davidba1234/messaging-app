@@ -6,7 +6,6 @@ PAT.txt
 env/
 GitPAT.txt
 
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -19,8 +18,8 @@ venv/
 
 # Logs and databases
 *.log
-messenger.db
-server.log
+server/messenger.db
+server/*.log*
 
 # Operating System Files
 .DS_Store
