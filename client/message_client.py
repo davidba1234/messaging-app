@@ -198,7 +198,7 @@ class MessageInput(QTextEdit):
 class PopupNotification(QDialog):
     acknowledged  = pyqtSignal(int)      # message_id
     typing_reply  = pyqtSignal(int)      # message_id
-    reply_clicked = pyqtSignal(str, str) # sender username, group_name
+    reply_clicked = pyqtSignal(str, str, int) # sender username, group_name, msg_id
 
     def __init__(self, sender: str, content: str, msg_id: int,
                  group_name: str = None, parent=None, main_window=None):
@@ -284,7 +284,7 @@ class PopupNotification(QDialog):
 
     def _reply(self):
         self.typing_reply.emit(self.msg_id)
-        self.reply_clicked.emit(self.sender, self.group_name)
+        self.reply_clicked.emit(self.sender, self.group_name, self.msg_id)
         self.close()
 
 
@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
         self.groups:       list[str] = []
         self.current_chat: str | None = None
         self.chat_is_group = False
+        self.current_reply_parent: int | None = None
+        self.collapsed_threads: set[int] = set()
+        self.current_messages: list[dict] = []
         self.popups: list[PopupNotification] = []
 
         self._build_ui()
@@ -353,10 +356,30 @@ class MainWindow(QMainWindow):
         self.chat_view = QTextBrowser()
         self.chat_view.setFont(QFont("Segoe UI", 10))
         self.chat_view.setOpenExternalLinks(False)
+        self.chat_view.anchorClicked.connect(self._on_anchor_clicked)
         rl.addWidget(self.chat_view, stretch=1)
 
         # compose row
-        compose = QHBoxLayout()
+        compose = QVBoxLayout()
+        compose.setSpacing(4)
+        
+        self.reply_indicator_widget = QWidget()
+        ril = QHBoxLayout(self.reply_indicator_widget)
+        ril.setContentsMargins(4, 0, 4, 0)
+        self.reply_label = QLabel("")
+        self.reply_label.setStyleSheet("color:#1a73e8; font-weight:bold; font-size:11px;")
+        self.reply_cancel_btn = QPushButton("✕")
+        self.reply_cancel_btn.setFixedSize(20, 20)
+        self.reply_cancel_btn.setStyleSheet("QPushButton{background:#aaa;color:white;border:none;border-radius:10px;font-weight:bold;padding:0px;}QPushButton:hover{background:#ea4335;}")
+        self.reply_cancel_btn.clicked.connect(self._cancel_reply)
+        ril.addWidget(self.reply_label)
+        ril.addWidget(self.reply_cancel_btn)
+        ril.addStretch()
+        self.reply_indicator_widget.hide()
+        
+        compose.addWidget(self.reply_indicator_widget)
+
+        input_row = QHBoxLayout()
         self.msg_input = MessageInput()
         self.msg_input.setMaximumHeight(80)
         self.msg_input.setPlaceholderText(
@@ -364,7 +387,7 @@ class MainWindow(QMainWindow):
         )
         self.msg_input.setFont(QFont("Segoe UI", 10))
         self.msg_input.send_requested.connect(self._send)
-        compose.addWidget(self.msg_input)
+        input_row.addWidget(self.msg_input)
 
         bcol = QVBoxLayout()
         self.send_btn = QPushButton("Send  📤")
@@ -377,7 +400,9 @@ class MainWindow(QMainWindow):
         self.dict_btn.setFixedHeight(36)
         self.dict_btn.clicked.connect(self._dictate)
         bcol.addWidget(self.dict_btn)
-        compose.addLayout(bcol)
+        input_row.addLayout(bcol)
+
+        compose.addLayout(input_row)
 
         rl.addLayout(compose)
 
@@ -466,6 +491,7 @@ class MainWindow(QMainWindow):
         user = item.data(Qt.ItemDataRole.UserRole)
         self.current_chat = user
         self.chat_is_group = False
+        self._set_reply_parent(None)
         dot = "🟢" if user in self.online_users else "⚪"
         self.chat_header.setText(f"{dot}  Chat with {user}")
         self.send_btn.setEnabled(True)
@@ -477,10 +503,41 @@ class MainWindow(QMainWindow):
         grp = item.data(Qt.ItemDataRole.UserRole)
         self.current_chat = grp
         self.chat_is_group = True
+        self._set_reply_parent(None)
         self.chat_header.setText(f"👥  Group: {grp}")
         self.send_btn.setEnabled(True)
         self.status.setText("")
         self.ws.send({"type": "history_request", "with_group": grp})
+
+    def _cancel_reply(self):
+        self._set_reply_parent(None)
+
+    def _set_reply_parent(self, msg_id: int = None):
+        self.current_reply_parent = msg_id
+        if msg_id is None:
+            self.reply_indicator_widget.hide()
+            self.send_btn.setText("New Thread  📤" if self.chat_is_group else "Send  📤")
+        else:
+            orig = next((m for m in self.current_messages if m["id"] == msg_id), None)
+            sender = orig["sender"] if orig else "thread"
+            if "|" in sender: sender = sender.split("|", 1)[0]
+            self.reply_label.setText(f"Replying to {sender}'s thread")
+            self.reply_indicator_widget.show()
+            self.send_btn.setText("Reply  📤")
+            self.msg_input.setFocus()
+            
+    def _on_anchor_clicked(self, url):
+        target = url.toString()
+        if target.startswith("reply:"):
+            msg_id = int(target.split(":")[1])
+            self._set_reply_parent(msg_id)
+        elif target.startswith("toggle:"):
+            msg_id = int(target.split(":")[1])
+            if msg_id in self.collapsed_threads:
+                self.collapsed_threads.remove(msg_id)
+            else:
+                self.collapsed_threads.add(msg_id)
+            self._render_chat()
 
     # ── sending ──────────────────────────────────────────────
 
@@ -497,9 +554,24 @@ class MainWindow(QMainWindow):
             payload["recipient"] = self.current_chat
             payload["group_name"] = None
 
+        if self.current_reply_parent:
+            payload["parent_id"] = self.current_reply_parent
+
         self.ws.send(payload)
-        self._bubble("You", text, datetime.now().strftime("%H:%M"), mine=True)
+        
+        fake_msg = {
+            "id": int(time.time() * 1000) * -1,
+            "sender": UNIQUE_ID,
+            "content": text,
+            "group_name": self.current_chat if self.chat_is_group else None,
+            "timestamp": datetime.now().isoformat(),
+            "parent_id": self.current_reply_parent
+        }
+        self.current_messages.append(fake_msg)
+        self._render_chat()
+
         self.msg_input.clear()
+        self._set_reply_parent(None)
 
     # ── dictation ────────────────────────────────────────────
 
@@ -607,77 +679,120 @@ class MainWindow(QMainWindow):
         content   = data["content"]
         msg_id    = data["id"]
         grp       = data.get("group_name")
-        ts        = data.get("timestamp", "")
-        time_str  = datetime.now().strftime("%H:%M")
-        if ts:
-            try:
-                time_str = datetime.fromisoformat(ts).strftime("%H:%M")
-            except Exception:
-                pass
 
-        # Is the user currently looking at this conversation AND is the app active/focused?
         viewing = (
             (not grp and self.current_chat == sender_raw and not self.chat_is_group)
             or (grp and self.current_chat == grp and self.chat_is_group)
         )
 
         if viewing:
-            self._bubble(sender_name, content, time_str, mine=False)
+            self.current_messages.append(data)
+            self._render_chat()
             if self.status.text() == f"✍️ {sender_raw} is typing a reply":
                 self.status.setText("")
+            
+        parent_id = data.get("parent_id")
+        if parent_id is not None and grp:
+            return # Suppress popup for replies to group messages. DMs still pop up!
             
         self._popup(sender_raw, content, msg_id, grp)
 
     def _show_history(self, data: dict):
+        self.current_messages = data.get("messages", [])
+        self._render_chat()
+
+    # ── chat rendering ───────────────────────────────────────
+
+    def _render_chat(self):
         self.chat_view.clear()
-        for m in data.get("messages", []):
-            mine = m["sender"] == UNIQUE_ID
-            ts = m.get("timestamp", "")
-            time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
-            if ts:
-                try:
-                    time_str = datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
-                except Exception:
-                    pass
+        
+        threads = {} # parent_id or msg_id -> [messages]
+        roots = []
+        
+        for m in self.current_messages:
+            pid = m.get("parent_id")
+            if not pid:
+                roots.append(m)
+                threads[m["id"]] = [m]
+            else:
+                if pid not in threads:
+                    threads[pid] = []
+                threads[pid].append(m)
+
+        html_blocks = []
+        
+        def get_ts(msg):
+            return msg.get("timestamp", "")
             
-            grp = m.get("group_name")
-            sender_raw = m["sender"]
-            if "|" in sender_raw:
-                sender_display, room = sender_raw.split("|", 1)
-                sender_name = f"{sender_display} ({room})"
-            else:
-                sender_name = sender_raw
+        roots.sort(key=get_ts)
+        
+        for root in roots:
+            rid = root["id"]
+            html_blocks.append(self._format_msg(root, indent=False, has_children=len(threads.get(rid, [])) > 1))
+            
+            if len(threads.get(rid, [])) > 1:
+                if rid not in self.collapsed_threads:
+                    for child in threads[rid][1:]:
+                        html_blocks.append(self._format_msg(child, indent=True))
+                
+        self.chat_view.setHtml("".join(html_blocks))
+        sb = self.chat_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
-            if grp and not mine:
-               name = f"{sender_name} ({grp})"
-            else:
-               name = "You" if mine else sender_name
+    def _format_msg(self, m: dict, indent: bool = False, has_children: bool = False) -> str:
+        mine = m["sender"] == UNIQUE_ID
+        ts = m.get("timestamp", "")
+        time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
+        if ts:
+            try:
+                time_str = datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
+            except Exception:
+                pass
+        
+        grp = m.get("group_name")
+        sender_raw = m["sender"]
+        if "|" in sender_raw:
+            sender_display, room = sender_raw.split("|", 1)
+            sender_name = f"{sender_display} ({room})"
+        else:
+            sender_name = sender_raw
 
-            self._bubble(name, m["content"], time_str, mine=mine, status=m.get("status",""))
-
-    # ── chat bubbles ─────────────────────────────────────────
-
-    def _bubble(self, name: str, text: str, time_str: str,
-                mine: bool, status: str = ""):
-        bg    = "#4caf50" if mine else "#d4edda"
+        name = "You" if mine else sender_name
+        status = m.get("status", "")
+        
+        bg    = "#4caf50" if mine else ("#e3f2fd" if indent else "#d4edda")
         fg    = "white"   if mine else "black"
         align = "right"   if mine else "left"
         st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")
-        safe  = html.escape(text).replace("\n", "<br>")
+        safe  = html.escape(m["content"]).replace("\n", "<br>")
+        
+        if indent:
+            margin = "margin: 4px 30px 4px 8px;" if mine else "margin: 4px 8px 4px 30px;"
+        else:
+            margin = "margin: 4px 8px;"
+            
+        max_w = "55%" if indent else "65%"
+        
+        controls = ""
+        if not indent and grp:
+            controls += f'<a href="reply:{m["id"]}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:8px;">[Reply]</a> '
+            if has_children:
+                is_collapsed = m["id"] in self.collapsed_threads
+                sym = "[+]" if is_collapsed else "[-]"
+                controls += f'<a href="toggle:{m["id"]}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:4px;">{sym}</a>'
 
-        self.chat_view.append(f"""
-        <div style="text-align:{align};margin:4px 8px;">
+        return f"""
+        <div style="text-align:{align}; {margin}">
           <div style="display:inline-block;background:{bg};color:{fg};
-                      padding:8px 14px;border-radius:14px;max-width:65%;
+                      padding:8px 14px;border-radius:14px;max-width:{max_w};
                       text-align:left;font-size:13px;">
             <b style="font-size:11px;">{html.escape(name)}</b>
-            <span style="font-size:9px;opacity:.7;"> {time_str}</span><br>
+            <span style="font-size:9px;opacity:.7;"> {time_str}</span>
+            <div style="float:right;">{controls}</div><br>
             {safe}
             <span style="font-size:9px;opacity:.7;"> {st}</span>
           </div>
-        </div>""")
-        sb = self.chat_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        </div>"""
 
     # ── popup notifications ──────────────────────────────────
 
@@ -724,7 +839,7 @@ class MainWindow(QMainWindow):
         if activate:
             self._raise()
 
-    def _jump_to(self, username: str, group_name: str = None):
+    def _jump_to(self, username: str, group_name: str = None, msg_id: int = None):
         if group_name:
             for i in range(self.group_list.count()):
                 it = self.group_list.item(i)
@@ -741,7 +856,10 @@ class MainWindow(QMainWindow):
                     break
 
         self._raise()
-        self.msg_input.setFocus()
+        if msg_id is not None:
+            self._set_reply_parent(msg_id)
+        else:
+            self.msg_input.setFocus()
 
     # ── window management ────────────────────────────────────
 

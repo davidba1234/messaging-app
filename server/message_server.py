@@ -93,6 +93,12 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_msg_conversation
             ON messages(sender, timestamp);
     """)
+    
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN parent_id INTEGER DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass # Column likely already exists
+        
     conn.commit()
     conn.close()
     logger.info(f"[DB] Initialized at {DATABASE_PATH}")
@@ -118,14 +124,14 @@ async def db_all_users() -> list[str]:
 
 
 async def db_save_message(sender: str, recipients: list[str], content: str,
-                    group_name: Optional[str] = None) -> int:
+                    group_name: Optional[str] = None, parent_id: Optional[int] = None) -> int:
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         now = datetime.now().isoformat()
         cursor = await conn.execute("""
-            INSERT INTO messages (sender, group_name, content, timestamp)
-            VALUES (?, ?, ?, ?)
-        """, (sender, group_name, content, now))
+            INSERT INTO messages (sender, group_name, content, timestamp, parent_id)
+            VALUES (?, ?, ?, ?, ?)
+        """, (sender, group_name, content, now, parent_id))
         msg_id = cursor.lastrowid
         
         await conn.executemany("""
@@ -159,7 +165,7 @@ async def db_get_undelivered(username: str) -> list[dict]:
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute("""
-            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, m.parent_id, r.recipient, r.status
             FROM messages m
             JOIN message_recipients r ON m.id = r.msg_id
             WHERE r.recipient = ? AND r.status IN ('sent', 'queued')
@@ -173,7 +179,7 @@ async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute("""
-            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, r.recipient, r.status
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, m.parent_id, r.recipient, r.status
             FROM messages m
             JOIN message_recipients r ON m.id = r.msg_id
             WHERE ((m.sender=? AND r.recipient=?) OR (m.sender=? AND r.recipient=?))
@@ -189,7 +195,7 @@ async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute("""
-            SELECT id, sender, group_name, content, timestamp
+            SELECT id, sender, group_name, content, timestamp, parent_id
             FROM messages
             WHERE group_name = ?
             ORDER BY timestamp DESC
@@ -307,6 +313,7 @@ class ConnectionManager:
                 "group_name": msg["group_name"],
                 "content":    msg["content"],
                 "timestamp":  msg["timestamp"],
+                "parent_id":  msg["parent_id"],
             })
             if ok:
                 await db_update_status(msg["id"], "delivered", logic_user)
@@ -381,6 +388,7 @@ async def _handle_message(sender: str, data: dict):
     content    = (data.get("content") or "").strip()
     group_name = data.get("group_name")
     recipient  = data.get("recipient")
+    parent_id  = data.get("parent_id")
     if not content:
         return
 
@@ -395,7 +403,7 @@ async def _handle_message(sender: str, data: dict):
             if not recipients:
                  return
                  
-            msg_id = await db_save_message(logic_sender, recipients, content, group_name)
+            msg_id = await db_save_message(logic_sender, recipients, content, group_name, parent_id)
             for member in recipients:
                 ok = await mgr.send_to_logic(member, {
                     "type": "message", "id": msg_id,
@@ -403,6 +411,7 @@ async def _handle_message(sender: str, data: dict):
                     "recipient": member,
                     "group_name": group_name, "content": content,
                     "timestamp": datetime.now().isoformat(),
+                    "parent_id": parent_id,
                 })
                 if ok:
                     await db_update_status(msg_id, "delivered", member)
@@ -414,13 +423,14 @@ async def _handle_message(sender: str, data: dict):
     elif recipient:
         # ── Direct message ──
         logic_recipient = get_logic_id(recipient)
-        msg_id = await db_save_message(logic_sender, [logic_recipient], content)
+        msg_id = await db_save_message(logic_sender, [logic_recipient], content, parent_id=parent_id)
         ok = await mgr.send_to_logic(logic_recipient, {
             "type": "message", "id": msg_id,
             "sender": sender,
             "recipient": logic_recipient,
             "group_name": None, "content": content,
             "timestamp": datetime.now().isoformat(),
+            "parent_id": parent_id,
         })
         status = "delivered" if ok else "queued"
         await db_update_status(msg_id, status, logic_recipient)
