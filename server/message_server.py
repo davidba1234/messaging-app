@@ -35,6 +35,7 @@ def get_logic_id(full_id: str) -> str:
 
 DATABASE_PATH = Path(__file__).parent / "messenger.db"
 GROUPS_FILE   = Path(__file__).parent / "groups.json"
+LOCATIONS_FILE = Path(__file__).parent / "locations.json"
 HOST = "0.0.0.0"      # Listen on all interfaces
 PORT = 8765
 
@@ -344,6 +345,15 @@ async def startup():
 @app.get("/health")
 async def health():
     return {"status": "ok", "online": list(mgr.active.keys())}
+
+@app.get("/locations")
+async def serve_locations():
+    try:
+        with open(LOCATIONS_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error reading locations: {e}")
+        return {}
 
 
 @app.websocket("/ws/{username}")

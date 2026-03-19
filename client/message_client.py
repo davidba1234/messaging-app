@@ -740,7 +740,7 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _format_msg(self, m: dict, indent: bool = False, has_children: bool = False) -> str:
-        mine = m["sender"] == UNIQUE_ID
+        mine = m["sender"].split("|")[0] == USERNAME
         ts = m.get("timestamp", "")
         time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
         if ts:
@@ -907,6 +907,21 @@ if __name__ == "__main__":
                 sys.exit(0)
         else:
             sys.exit(0)
+
+    # Fetch room name from server and update UNIQUE_ID
+    room_name = COMPUTER_NAME
+    if HOST:
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"http://{HOST}:{PORT}/locations", method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as r:
+                import json
+                locs = json.loads(r.read().decode())
+                room_name = locs.get(COMPUTER_NAME, COMPUTER_NAME)
+        except Exception as e:
+            print(f"Could not load locations: {e}")
+            
+    UNIQUE_ID = f"{USERNAME}|{room_name}"
 
     win = MainWindow()
     win.show()
