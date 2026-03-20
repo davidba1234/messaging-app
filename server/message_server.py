@@ -226,6 +226,9 @@ def get_groups():
 
 
 async def resolve_group_members(group_name: str) -> list[str]:
+    if group_name == "Everyone":
+        all_users = await db_all_users()
+        return list(set(get_logic_id(u) for u in all_users))
     groups = get_groups()
     if group_name not in groups:
         return []
@@ -295,11 +298,18 @@ class ConnectionManager:
 
     async def broadcast_user_list(self):
         all_users = await db_all_users()
+        try:
+            with open(LOCATIONS_FILE, "r") as f:
+                locs = json.load(f)
+        except Exception:
+            locs = {}
         payload = {
             "type":         "user_list",
             "online_users": list(self.active.keys()),
             "all_users":    all_users,
             "groups":       list(get_groups().keys()),
+            "categorized_users": get_groups(),
+            "locations":    locs,
         }
         for ws in list(self.active.values()):
             try:
@@ -412,9 +422,15 @@ async def _handle_message(sender: str, data: dict):
 
     if group_name:
         current_groups = get_groups()
-        if group_name in current_groups:
-            # ── Group message → fan-out ──
+        if group_name == "Everyone" or group_name in current_groups:
             members = await resolve_group_members(group_name)
+        elif group_name.startswith("AdHoc|"):
+            members = group_name.split("|")[1].split(",")
+        else:
+            return
+
+        if True:
+            # ── Group message → fan-out ──
             online_logic_ids = {get_logic_id(k) for k in mgr.active.keys()}
             recipients = [m for m in members if m != logic_sender and m in online_logic_ids]
             
@@ -506,7 +522,7 @@ async def _handle_history(sender: str, data: dict):
     group = data.get("with_group")
     if group:
         current_groups = get_groups()
-        if group in current_groups:
+        if group == "Everyone" or group in current_groups or group.startswith("AdHoc|"):
             history = await db_get_group_history(group)
             await mgr.send_to(sender, {
                 "type":       "history_response",

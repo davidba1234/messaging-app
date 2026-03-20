@@ -22,7 +22,8 @@ except Exception:
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListWidget, QListWidgetItem, QTextBrowser, QTextEdit, QPushButton,
+    QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
+    QTextBrowser, QTextEdit, QPushButton,
     QLabel, QSystemTrayIcon, QMenu, QSplitter, QMessageBox, QDialog,
     QFrame, QLineEdit, QFormLayout
 )
@@ -287,6 +288,8 @@ class MainWindow(QMainWindow):
         self.online_users: list[str] = []
         self.all_users:    list[str] = []
         self.groups:       list[str] = []
+        self.locations:    dict[str, str] = {}
+        self.categorized:  dict[str, list[str]] = {}
         self.current_chat: str | None = None
         self.chat_is_group = False
         self.current_reply_parent: int | None = None
@@ -315,15 +318,12 @@ class MainWindow(QMainWindow):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(8, 8, 4, 8)
 
-        ll.addWidget(self._section_label("CONTACTS"))
-        self.user_list = QListWidget()
-        self.user_list.itemClicked.connect(self._pick_user)
-        ll.addWidget(self.user_list, stretch=3)
-
-        ll.addWidget(self._section_label("GROUPS"))
-        self.group_list = QListWidget()
-        self.group_list.itemClicked.connect(self._pick_group)
-        ll.addWidget(self.group_list, stretch=1)
+        ll.addWidget(self._section_label("DIRECTORY"))
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.itemClicked.connect(self._tree_item_clicked)
+        self.tree.itemChanged.connect(self._tree_item_checked)
+        ll.addWidget(self.tree, stretch=1)
 
         left.setStyleSheet("background:#f7f8fa;")
         splitter.addWidget(left)
@@ -468,36 +468,123 @@ class MainWindow(QMainWindow):
 
     # ── contact selection ────────────────────────────────────
 
-    def _pick_user(self, item: QListWidgetItem):
-        self.group_list.clearSelection()
-        user = item.data(Qt.ItemDataRole.UserRole)
-        self.current_chat = user
-        self.chat_is_group = False
-        self._set_reply_parent(None)
-        dot = "🟢" if user in self.online_users else "⚪"
-        self.chat_header.setText(f"{dot}  Chat with {user}")
-        self.status.setText("")
-        self.ws.send({"type": "history_request", "with_user": user})
+    def _get_checked_users(self) -> list[str]:
+        checked = []
+        for i in range(1, self.tree.topLevelItemCount()):
+            tli = self.tree.topLevelItem(i)
+            for j in range(tli.childCount()):
+                child = tli.child(j)
+                if child.checkState(0) == Qt.CheckState.Checked:
+                    checked.append(child.data(0, Qt.ItemDataRole.UserRole))
+        return checked
 
-        if user in self.online_users:
+    def _tree_item_clicked(self, item: QTreeWidgetItem, col: int):
+        self.tree.blockSignals(True)
+        for i in range(self.tree.topLevelItemCount()):
+            tli = self.tree.topLevelItem(i)
+            tli.setCheckState(0, Qt.CheckState.Unchecked)
+            for j in range(tli.childCount()):
+                tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
+        item.setCheckState(0, Qt.CheckState.Checked)
+        if item.childCount() > 0:
+            for j in range(item.childCount()):
+                item.child(j).setCheckState(0, Qt.CheckState.Checked)
+        self.tree.blockSignals(False)
+        self._update_ad_hoc_selection()
+
+    def _tree_item_checked(self, item: QTreeWidgetItem, col: int):
+        self.tree.blockSignals(True)
+        state = item.checkState(0)
+        
+        if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
+            for i in range(1, self.tree.topLevelItemCount()):
+                tli = self.tree.topLevelItem(i)
+                tli.setCheckState(0, state)
+                for j in range(tli.childCount()):
+                    tli.child(j).setCheckState(0, state)
+        elif item.parent() is None:
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(0, state)
+        else:
+            p = item.parent()
+            all_checked = all(p.child(i).checkState(0) == Qt.CheckState.Checked for i in range(p.childCount()))
+            p.setCheckState(0, Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
+
+        self.tree.blockSignals(False)
+        self._update_ad_hoc_selection()
+
+    def _update_send_permission(self):
+        if self.chat_is_group:
             self.send_btn.setEnabled(True)
             self.msg_input.setEnabled(True)
             self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
-        else:
+        elif self.current_chat:
+            if self.current_chat in self.online_users:
+                self.send_btn.setEnabled(True)
+                self.msg_input.setEnabled(True)
+                self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
+            else:
+                self.send_btn.setEnabled(False)
+                self.msg_input.setEnabled(False)
+                self.msg_input.setPlaceholderText("User is offline. You cannot send them messages.")
+
+    def _update_ad_hoc_selection(self):
+        checked_full_ids = self._get_checked_users()
+        
+        if not checked_full_ids:
+            self.chat_header.setText("Select a contact or check boxes to chat")
+            self.current_chat = None
+            self.chat_is_group = False
             self.send_btn.setEnabled(False)
             self.msg_input.setEnabled(False)
-            self.msg_input.setPlaceholderText("User is offline. You cannot send them messages.")
+            self.chat_view.clear()
+            self._set_reply_parent(None)
+            return
 
-    def _pick_group(self, item: QListWidgetItem):
-        self.user_list.clearSelection()
-        grp = item.data(Qt.ItemDataRole.UserRole)
-        self.current_chat = grp
-        self.chat_is_group = True
         self._set_reply_parent(None)
-        self.chat_header.setText(f"👥  Group: {grp}")
-        self.send_btn.setEnabled(True)
-        self.status.setText("")
-        self.ws.send({"type": "history_request", "with_group": grp})
+        
+        if len(checked_full_ids) == 1:
+            full_id = checked_full_ids[0]
+            self.current_chat = full_id
+            self.chat_is_group = False
+            username = full_id.split("|")[0] if "|" in full_id else full_id
+            dot = "🟢" if full_id in self.online_users else "⚪"
+            self.chat_header.setText(f"{dot} Chat with {username}")
+            self.ws.send({"type": "history_request", "with_user": full_id})
+            self._update_send_permission()
+            return
+            
+        logic_ids = [u.split("|")[0] if "|" in u else u for u in checked_full_ids]
+        
+        cat_match = None
+        for i in range(1, self.tree.topLevelItemCount()):
+            cat_item = self.tree.topLevelItem(i)
+            cat_name = cat_item.data(0, Qt.ItemDataRole.UserRole).split(":")[1] if cat_item.data(0, Qt.ItemDataRole.UserRole) else ""
+            cat_children = [cat_item.child(j).data(0, Qt.ItemDataRole.UserRole) for j in range(cat_item.childCount())]
+            if set(cat_children) == set(checked_full_ids) and len(cat_children) > 0:
+                cat_match = cat_name
+                break
+                
+        total_users_in_tree = sum(self.tree.topLevelItem(i).childCount() for i in range(1, self.tree.topLevelItemCount()))
+        if len(checked_full_ids) == total_users_in_tree and total_users_in_tree > 0:
+            cat_match = "Everyone"
+        
+        if cat_match:
+            self.current_chat = cat_match
+            self.chat_is_group = True
+            self.chat_header.setText(f"👥 Group: {cat_match}")
+            self.ws.send({"type": "history_request", "with_group": cat_match})
+        else:
+            sorted_logic = sorted(logic_ids)
+            self.current_chat = "AdHoc|" + ",".join(sorted_logic)
+            self.chat_is_group = True
+            if len(sorted_logic) <= 3:
+                self.chat_header.setText(f"👥 Custom: {', '.join(sorted_logic)}")
+            else:
+                self.chat_header.setText(f"👥 Custom: {len(sorted_logic)} recipients")
+            self.ws.send({"type": "history_request", "with_group": self.current_chat})
+            
+        self._update_send_permission()
 
     def _cancel_reply(self):
         self._set_reply_parent(None)
@@ -608,50 +695,82 @@ class MainWindow(QMainWindow):
         self.online_users = data.get("online_users", [])
         self.all_users    = data.get("all_users", [])
         self.groups       = data.get("groups", [])
+        self.locations    = data.get("locations", {})
+        self.categorized  = data.get("categorized_users", {})
 
-        sel = self.current_chat if not self.chat_is_group else None
+        checked_users = self._get_checked_users()
 
-        self.user_list.clear()
-        for full_id in sorted(self.all_users):
-            if full_id == UNIQUE_ID:
-                continue
-            
-            # Split "nurses|ROOM-101" into ["nurses", "ROOM-101"]
-            if "|" in full_id:
-                name, room = full_id.split("|", 1)
-                display_text = f"{name} ({room})"
+        self.tree.blockSignals(True)
+        self.tree.clear()
+
+        # Send to Everyone node
+        everyone = QTreeWidgetItem(["🌎 Send to Everyone"])
+        everyone.setFlags(everyone.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        everyone.setCheckState(0, Qt.CheckState.Unchecked)
+        self.tree.addTopLevelItem(everyone)
+
+        cats = ["Doctors", "nurses", "Admin", "Management"]
+        inserted_logic_ids = set()
+        
+        for cat in cats + ["Other"]:
+            if cat == "Other":
+                cat_users = [u for u in self.all_users if (u.split("|")[0] if "|" in u else u) not in inserted_logic_ids]
             else:
-                display_text = full_id # Fallback for old/simple IDs
-
-            on = full_id in self.online_users
-            it = QListWidgetItem(f" {'🟢' if on else '⚪'}  {display_text}")
-            it.setData(Qt.ItemDataRole.UserRole, full_id)
-            
-            if not on:
-                it.setForeground(QColor("#a0a0a0"))
-                font = it.font()
-                font.setItalic(True)
-                it.setFont(font)
+                cat_users = self.categorized.get(cat, [])
+                if not cat_users and cat not in ["Doctors", "nurses", "Admin"]: continue
                 
-            self.user_list.addItem(it)
-            if full_id == sel:
-                it.setSelected(True)
-
-        self.group_list.clear()
-        for g in self.groups:
-            it = QListWidgetItem(f" 📋  {g}")
-            it.setData(Qt.ItemDataRole.UserRole, g)
-            self.group_list.addItem(it)
-
-        if self.current_chat and not self.chat_is_group:
-            if self.current_chat in self.online_users:
-                self.send_btn.setEnabled(True)
-                self.msg_input.setEnabled(True)
-                self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
+            matching_full_ids = []
+            if cat == "Other":
+                matching_full_ids = cat_users
             else:
-                self.send_btn.setEnabled(False)
-                self.msg_input.setEnabled(False)
-                self.msg_input.setPlaceholderText("User is offline. You cannot send them messages.")
+                for logic in cat_users:
+                    full_id = next((u for u in self.all_users if (u.split("|")[0] if "|" in u else u) == logic), logic)
+                    matching_full_ids.append(full_id)
+
+            display_cat = cat.capitalize() if cat == "nurses" else cat
+            cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
+            cat_item.setData(0, Qt.ItemDataRole.UserRole, f"CAT:{display_cat}")
+            cat_item.setFlags(cat_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            cat_item.setCheckState(0, Qt.CheckState.Unchecked)
+            
+            all_children_checked = True and len(matching_full_ids) > 0
+            filtered_full_ids = [u for u in matching_full_ids if u != UNIQUE_ID]
+            
+            for full_id in sorted(set(filtered_full_ids)):
+                logic_id = full_id.split("|")[0] if "|" in full_id else full_id
+                inserted_logic_ids.add(logic_id)
+                on = full_id in self.online_users
+                
+                if on:
+                    pc_name = full_id.split("|")[1] if "|" in full_id else full_id
+                    loc = self.locations.get(pc_name, pc_name)
+                    display = f"🟢 {logic_id} ({loc})" if loc else f"🟢 {logic_id}"
+                else:
+                    display = f"⚪ {logic_id}"
+                    
+                it = QTreeWidgetItem([display])
+                it.setData(0, Qt.ItemDataRole.UserRole, full_id)
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                is_checked = full_id in checked_users
+                it.setCheckState(0, Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+                if not is_checked: all_children_checked = False
+                
+                if not on:
+                    it.setForeground(0, QColor("#a0a0a0"))
+                    font = it.font(0)
+                    font.setItalic(True)
+                    it.setFont(0, font)
+                    
+                cat_item.addChild(it)
+                
+            if filtered_full_ids or cat != "Other":
+                self.tree.addTopLevelItem(cat_item)
+                if all_children_checked and filtered_full_ids:
+                    cat_item.setCheckState(0, Qt.CheckState.Checked)
+                cat_item.setExpanded(True)
+            
+        self.tree.blockSignals(False)
+        self._update_send_permission()
 
     def _on_incoming(self, data: dict):
         sender_raw = data["sender"]
@@ -818,32 +937,36 @@ class MainWindow(QMainWindow):
         self.popups.append(pop)
 
     def select_contact(self, username, activate=True):
-        """Select a contact in the list and load their conversation."""
-        for i in range(self.user_list.count()):
-            item = self.user_list.item(i)
-            if item.text() == username or item.data(Qt.ItemDataRole.UserRole) == username:
-                self.user_list.setCurrentItem(item)
-                self._pick_user(item)
-                break
+        found_item = None
+        for i in range(1, self.tree.topLevelItemCount()):
+            tli = self.tree.topLevelItem(i)
+            for j in range(tli.childCount()):
+                child = tli.child(j)
+                if child.text(0) == username or child.data(0, Qt.ItemDataRole.UserRole) == username:
+                    found_item = child
+                    break
+            if found_item: break
+        
+        if found_item:
+            self.tree.setCurrentItem(found_item)
+            self._tree_item_clicked(found_item, 0)
         
         if activate:
             self._raise()
 
     def _jump_to(self, username: str, group_name: str = None, msg_id: int = None):
         if group_name:
-            for i in range(self.group_list.count()):
-                it = self.group_list.item(i)
-                if it.data(Qt.ItemDataRole.UserRole) == group_name:
-                    self.group_list.setCurrentItem(it)
-                    self._pick_group(it)
+            found_item = None
+            for i in range(1, self.tree.topLevelItemCount()):
+                tli = self.tree.topLevelItem(i)
+                if tli.data(0, Qt.ItemDataRole.UserRole) == f"CAT:{group_name}":
+                    found_item = tli
                     break
+            if found_item:
+                self.tree.setCurrentItem(found_item)
+                self._tree_item_clicked(found_item, 0)
         else:
-            for i in range(self.user_list.count()):
-                it = self.user_list.item(i)
-                if it.data(Qt.ItemDataRole.UserRole) == username:
-                    self.user_list.setCurrentItem(it)
-                    self._pick_user(it)
-                    break
+            self.select_contact(username, activate=False)
 
         self._raise()
         if msg_id is not None:
