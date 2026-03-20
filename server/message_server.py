@@ -9,7 +9,10 @@ import sqlite3
 import aiosqlite
 import html
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
+
+AUCKLAND_TZ = ZoneInfo("Pacific/Auckland")
 from typing import Optional
 import logging
 from logging.handlers import TimedRotatingFileHandler
@@ -108,7 +111,7 @@ def init_database():
 async def db_register_user(username: str):
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
-        now = datetime.now().isoformat()
+        now = datetime.now(AUCKLAND_TZ).isoformat()
         await conn.execute("""
             INSERT INTO users (username, last_seen) VALUES (?, ?)
             ON CONFLICT(username) DO UPDATE SET last_seen = ?
@@ -128,7 +131,7 @@ async def db_save_message(sender: str, recipients: list[str], content: str,
                     group_name: Optional[str] = None, parent_id: Optional[int] = None) -> int:
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
-        now = datetime.now().isoformat()
+        now = datetime.now(AUCKLAND_TZ).isoformat()
         cursor = await conn.execute("""
             INSERT INTO messages (sender, group_name, content, timestamp, parent_id)
             VALUES (?, ?, ?, ?, ?)
@@ -177,6 +180,7 @@ async def db_get_undelivered(username: str) -> list[dict]:
 
 
 async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]:
+    today_start = datetime.now(AUCKLAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute("""
@@ -185,23 +189,25 @@ async def db_get_history(user1: str, user2: str, limit: int = 100) -> list[dict]
             JOIN message_recipients r ON m.id = r.msg_id
             WHERE ((m.sender=? AND r.recipient=?) OR (m.sender=? AND r.recipient=?))
               AND m.group_name IS NULL
+              AND m.timestamp >= ?
             ORDER BY m.timestamp DESC
             LIMIT ?
-        """, (user1, user2, user2, user1, limit)) as cursor:
+        """, (user1, user2, user2, user1, today_start, limit)) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in reversed(rows)]
 
 
 async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
+    today_start = datetime.now(AUCKLAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     async with get_db_async() as conn:
         conn.row_factory = aiosqlite.Row
         async with conn.execute("""
             SELECT id, sender, group_name, content, timestamp, parent_id
             FROM messages
-            WHERE group_name = ?
+            WHERE group_name = ? AND timestamp >= ?
             ORDER BY timestamp DESC
             LIMIT ?
-        """, (group_name, limit)) as cursor:
+        """, (group_name, today_start, limit)) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in reversed(rows)]
 
@@ -409,18 +415,22 @@ async def _handle_message(sender: str, data: dict):
         if group_name in current_groups:
             # ── Group message → fan-out ──
             members = await resolve_group_members(group_name)
-            recipients = [m for m in members if m != logic_sender]
+            online_logic_ids = {get_logic_id(k) for k in mgr.active.keys()}
+            recipients = [m for m in members if m != logic_sender and m in online_logic_ids]
+            
+            msg_id = await db_save_message(logic_sender, recipients, content, group_name, parent_id)
+            
             if not recipients:
+                 await mgr.send_to(sender, {"type": "message_sent", "group_name": group_name, "status": "sent"})
                  return
                  
-            msg_id = await db_save_message(logic_sender, recipients, content, group_name, parent_id)
             for member in recipients:
                 ok = await mgr.send_to_logic(member, {
                     "type": "message", "id": msg_id,
                     "sender": sender,
                     "recipient": member,
                     "group_name": group_name, "content": content,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
                     "parent_id": parent_id,
                 })
                 if ok:
@@ -433,13 +443,22 @@ async def _handle_message(sender: str, data: dict):
     elif recipient:
         # ── Direct message ──
         logic_recipient = get_logic_id(recipient)
+        
+        # Check if recipient is online
+        is_online = any(get_logic_id(k) == logic_recipient for k in mgr.active.keys())
+        if not is_online:
+            await mgr.send_to(sender, {
+                "type": "error", "message": f"User {recipient} is offline. Message not sent."
+            })
+            return
+
         msg_id = await db_save_message(logic_sender, [logic_recipient], content, parent_id=parent_id)
         ok = await mgr.send_to_logic(logic_recipient, {
             "type": "message", "id": msg_id,
             "sender": sender,
             "recipient": logic_recipient,
             "group_name": None, "content": content,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
             "parent_id": parent_id,
         })
         status = "delivered" if ok else "queued"

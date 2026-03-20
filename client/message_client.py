@@ -10,8 +10,15 @@ import json
 import html
 import time
 import socket
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+    AUCKLAND_TZ = ZoneInfo("Pacific/Auckland")
+    def get_auckland_time(): return datetime.now(AUCKLAND_TZ)
+except Exception:
+    def get_auckland_time(): return datetime.now()
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -494,9 +501,17 @@ class MainWindow(QMainWindow):
         self._set_reply_parent(None)
         dot = "🟢" if user in self.online_users else "⚪"
         self.chat_header.setText(f"{dot}  Chat with {user}")
-        self.send_btn.setEnabled(True)
         self.status.setText("")
         self.ws.send({"type": "history_request", "with_user": user})
+
+        if user in self.online_users:
+            self.send_btn.setEnabled(True)
+            self.msg_input.setEnabled(True)
+            self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
+        else:
+            self.send_btn.setEnabled(False)
+            self.msg_input.setEnabled(False)
+            self.msg_input.setPlaceholderText("User is offline. You cannot send them messages.")
 
     def _pick_group(self, item: QListWidgetItem):
         self.user_list.clearSelection()
@@ -564,7 +579,7 @@ class MainWindow(QMainWindow):
             "sender": UNIQUE_ID,
             "content": text,
             "group_name": self.current_chat if self.chat_is_group else None,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_auckland_time().isoformat(),
             "parent_id": self.current_reply_parent
         }
         self.current_messages.append(fake_msg)
@@ -668,6 +683,16 @@ class MainWindow(QMainWindow):
             it.setData(Qt.ItemDataRole.UserRole, g)
             self.group_list.addItem(it)
 
+        if self.current_chat and not self.chat_is_group:
+            if self.current_chat in self.online_users:
+                self.send_btn.setEnabled(True)
+                self.msg_input.setEnabled(True)
+                self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
+            else:
+                self.send_btn.setEnabled(False)
+                self.msg_input.setEnabled(False)
+                self.msg_input.setPlaceholderText("User is offline. You cannot send them messages.")
+
     def _on_incoming(self, data: dict):
         sender_raw = data["sender"]
         if "|" in sender_raw:
@@ -742,7 +767,7 @@ class MainWindow(QMainWindow):
     def _format_msg(self, m: dict, indent: bool = False, has_children: bool = False) -> str:
         mine = m["sender"].split("|")[0] == USERNAME
         ts = m.get("timestamp", "")
-        time_str = datetime.now().strftime("%d-%m-%Y %H:%M")
+        time_str = get_auckland_time().strftime("%d-%m-%Y %H:%M")
         if ts:
             try:
                 time_str = datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
@@ -760,14 +785,19 @@ class MainWindow(QMainWindow):
         name = "You" if mine else sender_name
         status = m.get("status", "")
         
-        bg    = "#4caf50" if mine else ("#e3f2fd" if indent else "#d4edda")
-        fg    = "white"   if mine else "black"
+        if mine:
+            bg = "#e3f2fd" if indent else "#4caf50"
+            fg = "black" if indent else "white"
+        else:
+            bg = "#e3f2fd" if indent else "#d4edda"
+            fg = "black"
+            
         align = "right"   if mine else "left"
         st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")
         safe  = html.escape(m["content"]).replace("\n", "<br>")
         
         if indent:
-            margin = "margin: 4px 30px 4px 8px;" if mine else "margin: 4px 8px 4px 30px;"
+            margin = "margin: 4px 50px 4px 8px;" if mine else "margin: 4px 8px 4px 50px;"
         else:
             margin = "margin: 4px 8px;"
             
@@ -788,7 +818,7 @@ class MainWindow(QMainWindow):
                       text-align:left;font-size:13px;">
             <b style="font-size:11px;">{html.escape(name)}</b>
             <span style="font-size:9px;opacity:.7;"> {time_str}</span>
-            <div style="float:right;">{controls}</div><br>
+            <span style="margin-left:10px;">{controls}</span><br>
             {safe}
             <span style="font-size:9px;opacity:.7;"> {st}</span>
           </div>
