@@ -156,29 +156,7 @@ class WebSocketThread(QThread):
             self._ws.close()
 
 
-# ═══════════════════════════════════════════════════════════════
-# Dictation thread (optional — needs SpeechRecognition + PyAudio)
-# ═══════════════════════════════════════════════════════════════
 
-class DictationThread(QThread):
-    text_ready     = pyqtSignal(str)
-    error_occurred = pyqtSignal(str)
-
-    def run(self):
-        try:
-            import speech_recognition as sr
-            rec = sr.Recognizer()
-            with sr.Microphone() as src:
-                rec.adjust_for_ambient_noise(src, duration=0.5)
-                audio = rec.listen(src, timeout=10, phrase_time_limit=30)
-            self.text_ready.emit(rec.recognize_google(audio))
-        except ImportError:
-            self.error_occurred.emit(
-                "Install dictation libs:\n"
-                "pip install SpeechRecognition pyaudio"
-            )
-        except Exception as e:
-            self.error_occurred.emit(str(e))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -403,10 +381,7 @@ class MainWindow(QMainWindow):
         self.send_btn.setEnabled(False)
         bcol.addWidget(self.send_btn)
 
-        self.dict_btn = QPushButton("Dictate 🎤")
-        self.dict_btn.setFixedHeight(36)
-        self.dict_btn.clicked.connect(self._dictate)
-        bcol.addWidget(self.dict_btn)
+
         input_row.addLayout(bcol)
 
         compose.addLayout(input_row)
@@ -588,22 +563,7 @@ class MainWindow(QMainWindow):
         self.msg_input.clear()
         self._set_reply_parent(None)
 
-    # ── dictation ────────────────────────────────────────────
 
-    def _dictate(self):
-        self.dict_btn.setText("🔴 Listening…")
-        self.dict_btn.setEnabled(False)
-        self._dt = DictationThread()
-        self._dt.text_ready.connect(lambda t: self.msg_input.insertPlainText(t))
-        self._dt.error_occurred.connect(
-            lambda e: QMessageBox.warning(self, "Dictation Error", e)
-        )
-        self._dt.finished.connect(self._dict_reset)
-        self._dt.start()
-
-    def _dict_reset(self):
-        self.dict_btn.setText("Dictate 🎤")
-        self.dict_btn.setEnabled(True)
 
     # ── incoming server messages ─────────────────────────────
 
