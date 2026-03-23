@@ -820,40 +820,30 @@ class MainWindow(QMainWindow):
         
         msg_by_id = {m["id"]: m for m in self.current_messages}
         roots = []
-        threads = {} # root_id -> [messages]
-        seen_roots = set()
+        children_map = {} # parent_id -> [messages]
+        seen_fake_roots = set()
         
         for m in self.current_messages:
-            curr = m
-            for _ in range(50):
-                pid = curr.get("parent_id")
-                if not pid:
-                    break
-                if pid in msg_by_id:
-                    curr = msg_by_id[pid]
-                else:
-                    break
-                    
-            root_id = curr.get("parent_id") or curr["id"]
-            
-            if root_id not in seen_roots:
-                seen_roots.add(root_id)
-                threads[root_id] = []
-                if root_id in msg_by_id:
-                    roots.append(msg_by_id[root_id])
-                    threads[root_id].append(msg_by_id[root_id])
-                else:
+            pid = m.get("parent_id")
+            if not pid:
+                roots.append(m)
+            elif pid in msg_by_id:
+                if pid not in children_map:
+                    children_map[pid] = []
+                children_map[pid].append(m)
+            else:
+                if pid not in seen_fake_roots:
+                    seen_fake_roots.add(pid)
                     fake_root = {
-                        "id": root_id, 
+                        "id": pid, 
                         "sender": "System", 
                         "content": "<i>[Original message not loaded]</i>",
                         "timestamp": m.get("timestamp", "")
                     }
                     roots.append(fake_root)
-                    threads[root_id].append(fake_root)
-            
-            if m["id"] != root_id:
-                threads[root_id].append(m)
+                if pid not in children_map:
+                    children_map[pid] = []
+                children_map[pid].append(m)
 
         html_blocks = []
         
@@ -862,21 +852,31 @@ class MainWindow(QMainWindow):
             
         roots.sort(key=get_ts)
         
-        for root in roots:
-            rid = root["id"]
-            thread_msgs = threads.get(rid, [])
-            html_blocks.append(self._format_msg(root, indent=False, has_children=len(thread_msgs) > 1))
+        def render_thread(msg, depth, root_id):
+            child_list = []
+            if msg["id"] in children_map:
+                child_list = children_map[msg["id"]]
+                
+            has_children = len(child_list) > 0
+            is_root = (depth == 0)
             
-            if len(thread_msgs) > 1:
-                if rid not in self.collapsed_threads:
-                    for child in thread_msgs[1:]:
-                        html_blocks.append(self._format_msg(child, indent=True))
-                        
+            html_blocks.append(self._format_msg(msg, depth=depth, has_children=has_children, root_id=root_id))
+            
+            if is_root and root_id in self.collapsed_threads:
+                return
+                
+            child_list.sort(key=get_ts)
+            for child in child_list:
+                render_thread(child, min(depth + 1, 6), root_id)
+        
+        for root in roots:
+            render_thread(root, 0, root["id"])
+            
         self.chat_view.setHtml("".join(html_blocks))
         sb = self.chat_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _format_msg(self, m: dict, indent: bool = False, has_children: bool = False) -> str:
+    def _format_msg(self, m: dict, depth: int = 0, has_children: bool = False, root_id: int | None = None) -> str:
         mine = m["sender"].split("|")[0] == USERNAME
         ts = m.get("timestamp", "")
         time_str = get_auckland_time().strftime("%d-%m-%Y %H:%M")
@@ -897,6 +897,7 @@ class MainWindow(QMainWindow):
         name = "You" if mine else sender_name
         status = m.get("status", "")
         
+        indent = depth > 0
         if mine:
             bg = "#e3f2fd" if indent else "#4caf50"
             fg = "black" if indent else "white"
@@ -908,20 +909,24 @@ class MainWindow(QMainWindow):
         st    = {"sent":"✓","delivered":"✓✓","acknowledged":"✅","queued":"📥"}.get(status,"")
         safe  = html.escape(m["content"]).replace("\n", "<br>")
         
+        shift = 50 if indent else 8
+        
         if indent:
-            margin = "margin: 4px 50px 4px 8px;" if mine else "margin: 4px 8px 4px 50px;"
+            margin = f"margin: 4px {shift}px 4px 8px;" if mine else f"margin: 4px 8px 4px {shift}px;"
         else:
             margin = "margin: 4px 8px;"
             
         max_w = "55%" if indent else "65%"
         
         controls = ""
-        if not indent:
+        can_reply = not (depth == 0 and mine)
+        if can_reply:
             controls += f'<a href="reply:{m["id"]}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:8px;">[Reply]</a> '
-            if has_children:
-                is_collapsed = m["id"] in self.collapsed_threads
-                sym = "[+]" if is_collapsed else "[-]"
-                controls += f'<a href="toggle:{m["id"]}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:4px;">{sym}</a>'
+            
+        if depth == 0 and has_children:
+            is_collapsed = root_id in self.collapsed_threads
+            sym = "[+]" if is_collapsed else "[-]"
+            controls += f'<a href="toggle:{root_id}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:4px;">{sym}</a>'
 
         return f"""
         <div style="text-align:{align}; {margin}">
