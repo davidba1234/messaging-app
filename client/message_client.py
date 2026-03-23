@@ -110,7 +110,8 @@ class WebSocketThread(QThread):
         self._running = True
 
     def run(self):
-        url = f"ws://{HOST}:{PORT}/ws/{UNIQUE_ID}"
+        import urllib.parse
+        url = f"ws://{HOST}:{PORT}/ws/{urllib.parse.quote(UNIQUE_ID)}"
         while self._running:
             try:
                 self._ws = websocket.WebSocketApp(
@@ -270,7 +271,7 @@ class PopupNotification(QDialog):
 
     def _reply(self):
         self.typing_reply.emit(self.msg_id)
-        self.reply_clicked.emit(self.sender, self.group_name, self.msg_id)
+        self.reply_clicked.emit(self.sender, self.group_name or "", self.msg_id)
         self.close()
 
 
@@ -714,18 +715,25 @@ class MainWindow(QMainWindow):
         
         for cat in cats + ["Other"]:
             if cat == "Other":
-                cat_users = [u for u in self.all_users if (u.split("|")[0] if "|" in u else u) not in inserted_logic_ids]
+                other_logic_ids = set()
+                cat_users = []
+                for u in self.all_users:
+                    l_id = (u.split("|")[0] if "|" in u else u)
+                    if l_id.lower() not in inserted_logic_ids and l_id.lower() not in other_logic_ids:
+                        other_logic_ids.add(l_id.lower())
+                        cat_users.append(l_id)
             else:
                 cat_users = self.categorized.get(cat, [])
                 if not cat_users and cat not in ["Doctors", "nurses", "Admin"]: continue
                 
             matching_full_ids = []
-            if cat == "Other":
-                matching_full_ids = cat_users
-            else:
-                for logic in cat_users:
-                    full_id = next((u for u in self.all_users if (u.split("|")[0] if "|" in u else u) == logic), logic)
-                    matching_full_ids.append(full_id)
+            for logic in cat_users:
+                online_match = next((u for u in self.online_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()), None)
+                if online_match:
+                    full_id = online_match
+                else:
+                    full_id = next((u for u in self.all_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()), logic)
+                matching_full_ids.append(full_id)
 
             display_cat = cat.capitalize() if cat == "nurses" else cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
@@ -738,7 +746,7 @@ class MainWindow(QMainWindow):
             
             for full_id in sorted(set(filtered_full_ids)):
                 logic_id = full_id.split("|")[0] if "|" in full_id else full_id
-                inserted_logic_ids.add(logic_id)
+                inserted_logic_ids.add(logic_id.lower())
                 on = full_id in self.online_users
                 
                 if on:
@@ -810,18 +818,42 @@ class MainWindow(QMainWindow):
     def _render_chat(self):
         self.chat_view.clear()
         
-        threads = {} # parent_id or msg_id -> [messages]
+        msg_by_id = {m["id"]: m for m in self.current_messages}
         roots = []
+        threads = {} # root_id -> [messages]
+        seen_roots = set()
         
         for m in self.current_messages:
-            pid = m.get("parent_id")
-            if not pid:
-                roots.append(m)
-                threads[m["id"]] = [m]
-            else:
-                if pid not in threads:
-                    threads[pid] = []
-                threads[pid].append(m)
+            curr = m
+            for _ in range(50):
+                pid = curr.get("parent_id")
+                if not pid:
+                    break
+                if pid in msg_by_id:
+                    curr = msg_by_id[pid]
+                else:
+                    break
+                    
+            root_id = curr.get("parent_id") or curr["id"]
+            
+            if root_id not in seen_roots:
+                seen_roots.add(root_id)
+                threads[root_id] = []
+                if root_id in msg_by_id:
+                    roots.append(msg_by_id[root_id])
+                    threads[root_id].append(msg_by_id[root_id])
+                else:
+                    fake_root = {
+                        "id": root_id, 
+                        "sender": "System", 
+                        "content": "<i>[Original message not loaded]</i>",
+                        "timestamp": m.get("timestamp", "")
+                    }
+                    roots.append(fake_root)
+                    threads[root_id].append(fake_root)
+            
+            if m["id"] != root_id:
+                threads[root_id].append(m)
 
         html_blocks = []
         
@@ -832,13 +864,14 @@ class MainWindow(QMainWindow):
         
         for root in roots:
             rid = root["id"]
-            html_blocks.append(self._format_msg(root, indent=False, has_children=len(threads.get(rid, [])) > 1))
+            thread_msgs = threads.get(rid, [])
+            html_blocks.append(self._format_msg(root, indent=False, has_children=len(thread_msgs) > 1))
             
-            if len(threads.get(rid, [])) > 1:
+            if len(thread_msgs) > 1:
                 if rid not in self.collapsed_threads:
-                    for child in threads[rid][1:]:
+                    for child in thread_msgs[1:]:
                         html_blocks.append(self._format_msg(child, indent=True))
-                
+                        
         self.chat_view.setHtml("".join(html_blocks))
         sb = self.chat_view.verticalScrollBar()
         sb.setValue(sb.maximum())
@@ -868,7 +901,7 @@ class MainWindow(QMainWindow):
             bg = "#e3f2fd" if indent else "#4caf50"
             fg = "black" if indent else "white"
         else:
-            bg = "#e3f2fd" if indent else "#d4edda"
+            bg = "#f5f5f5" if indent else "#d4edda"
             fg = "black"
             
         align = "right"   if mine else "left"
@@ -883,7 +916,7 @@ class MainWindow(QMainWindow):
         max_w = "55%" if indent else "65%"
         
         controls = ""
-        if not indent and grp:
+        if not indent:
             controls += f'<a href="reply:{m["id"]}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:8px;">[Reply]</a> '
             if has_children:
                 is_collapsed = m["id"] in self.collapsed_threads
