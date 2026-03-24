@@ -13,6 +13,15 @@ import socket
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# Create a dummy socket to reserve a port
+try:
+    # Use a random high port number that isn't commonly used
+    lock_socket = socket.socket(socket.getprotobyname('tcp'))
+    lock_socket.bind(('127.0.0.1', 65432)) 
+except socket.error:
+    print("OfficeMessenger is already running!")
+    sys.exit()
+
 try:
     from zoneinfo import ZoneInfo
     AUCKLAND_TZ = ZoneInfo("Pacific/Auckland")
@@ -910,11 +919,7 @@ class MainWindow(QMainWindow):
         safe  = html.escape(m["content"]).replace("\n", "<br>")
         
         shift = 50 if indent else 8
-        
-        if indent:
-            margin = f"margin: 4px {shift}px 4px 8px;" if mine else f"margin: 4px 8px 4px {shift}px;"
-        else:
-            margin = "margin: 4px 8px;"
+        margin = f"margin: 4px 8px 4px {shift}px;"
             
         max_w = "55%" if indent else "65%"
         
