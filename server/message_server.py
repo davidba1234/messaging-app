@@ -285,10 +285,10 @@ class ConnectionManager:
                 return False
         return False
 
-    async def send_to_logic(self, logic_id: str, payload: dict) -> bool:
+    async def send_to_logic(self, logic_id: str, payload: dict, exclude_full_id: str = None) -> bool:
         sent = False
         for full_id, ws in list(self.active.items()):
-            if get_logic_id(full_id) == logic_id:
+            if get_logic_id(full_id) == logic_id and full_id != exclude_full_id:
                 try:
                     await ws.send_json(payload)
                     sent = True
@@ -432,10 +432,24 @@ async def _handle_message(sender: str, data: dict):
         if True:
             # ── Group message → fan-out ──
             online_logic_ids = {get_logic_id(k) for k in mgr.active.keys()}
-            recipients = [m for m in members if m != logic_sender and m in online_logic_ids]
+            
+            # Ensure the sender gets the live broadcast on their other PCs
+            if logic_sender not in members:
+                members.append(logic_sender)
+                
+            # If this is a reply, we must include the original sender too so they can see replies
+            if parent_id:
+                orig_msg = await db_get_message(parent_id)
+                if orig_msg:
+                    orig_sender = orig_msg["sender"]
+                    if orig_sender not in members:
+                        members.append(orig_sender)
+
+            recipients = [m for m in members if m in online_logic_ids]
             
             msg_id = await db_save_message(logic_sender, recipients, content, group_name, parent_id)
             
+            # Send success confirmation to sender before broadcasting (if others exist)
             if not recipients:
                  await mgr.send_to(sender, {"type": "message_sent", "group_name": group_name, "status": "sent"})
                  return
@@ -448,8 +462,10 @@ async def _handle_message(sender: str, data: dict):
                     "group_name": group_name, "content": content,
                     "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
                     "parent_id": parent_id,
-                })
-                if ok:
+                }, exclude_full_id=sender)
+                
+                # Exclude the exact sending connection from being marked "delivered" if it's the sender
+                if ok and (member != logic_sender or len(recipients) > 1):
                     await db_update_status(msg_id, "delivered", member)
 
             await mgr.send_to(sender, {
