@@ -37,7 +37,7 @@ if ($versionContent -match "FileVersion', u'(\d+)\.(\d+)\.(\d+)'") {
 
 # 4. Run Compilation
 Write-Host "Compiling OfficeMessenger $newVersion..." -ForegroundColor Yellow
-& $compiler --noconsole --onefile --version-file "$versionFile" --distpath "$localOutputDir" "$pythonScript"
+& $compiler --onefile --noconsole --clean --version-file "$versionFile" --distpath "$localOutputDir" "$pythonScript"
 
 # 5. Deployment & Cleanup
 if ($LASTEXITCODE -eq 0) {

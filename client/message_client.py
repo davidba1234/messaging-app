@@ -13,14 +13,7 @@ import socket
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Create a dummy socket to reserve a port
-try:
-    # Use a random high port number that isn't commonly used
-    lock_socket = socket.socket(socket.getprotobyname('tcp'))
-    lock_socket.bind(('127.0.0.1', 65432)) 
-except socket.error:
-    print("OfficeMessenger is already running!")
-    sys.exit()
+
 
 try:
     from zoneinfo import ZoneInfo
@@ -585,7 +578,7 @@ class MainWindow(QMainWindow):
             self.chat_header.setText(f"👥 Group: {cat_match}")
             self.ws.send({"type": "history_request", "with_group": cat_match})
         else:
-            sorted_logic = sorted(logic_ids)
+            sorted_logic = sorted(set(logic_ids))
             self.current_chat = "AdHoc|" + ",".join(sorted_logic)
             self.chat_is_group = True
             if len(sorted_logic) <= 3:
@@ -737,12 +730,12 @@ class MainWindow(QMainWindow):
                 
             matching_full_ids = []
             for logic in cat_users:
-                online_match = next((u for u in self.online_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()), None)
-                if online_match:
-                    full_id = online_match
+                online_matches = [u for u in self.online_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()]
+                if online_matches:
+                    matching_full_ids.extend(online_matches)
                 else:
                     full_id = next((u for u in self.all_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()), logic)
-                matching_full_ids.append(full_id)
+                    matching_full_ids.append(full_id)
 
             display_cat = cat.capitalize() if cat == "nurses" else cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
