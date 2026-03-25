@@ -485,7 +485,7 @@ async def _handle_message(sender: str, data: dict):
             return
 
         msg_id = await db_save_message(logic_sender, [logic_recipient], content, parent_id=parent_id)
-        ok = await mgr.send_to_logic(logic_recipient, {
+        ok = await mgr.send_to(recipient, {
             "type": "message", "id": msg_id,
             "sender": sender,
             "recipient": logic_recipient,

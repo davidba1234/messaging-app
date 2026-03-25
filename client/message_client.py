@@ -823,7 +823,6 @@ class MainWindow(QMainWindow):
         msg_by_id = {m["id"]: m for m in self.current_messages}
         roots = []
         children_map = {} # parent_id -> [messages]
-        seen_fake_roots = set()
         
         for m in self.current_messages:
             pid = m.get("parent_id")
@@ -834,18 +833,7 @@ class MainWindow(QMainWindow):
                     children_map[pid] = []
                 children_map[pid].append(m)
             else:
-                if pid not in seen_fake_roots:
-                    seen_fake_roots.add(pid)
-                    fake_root = {
-                        "id": pid, 
-                        "sender": "System", 
-                        "content": "<i>[Original message not loaded]</i>",
-                        "timestamp": m.get("timestamp", "")
-                    }
-                    roots.append(fake_root)
-                if pid not in children_map:
-                    children_map[pid] = []
-                children_map[pid].append(m)
+                roots.append(m)
 
         html_blocks = []
         
