@@ -698,7 +698,7 @@ class MainWindow(QMainWindow):
         self.online_users = data.get("online_users", [])
         self.all_users    = data.get("all_users", [])
         self.groups       = data.get("groups", [])
-        self.locations    = data.get("locations", {})
+        self.locations    = {k.lower(): v for k, v in data.get("locations", {}).items()}
         self.categorized  = data.get("categorized_users", {})
 
         checked_users = self._get_checked_users()
@@ -753,7 +753,7 @@ class MainWindow(QMainWindow):
                 
                 if on:
                     pc_name = full_id.split("|")[1] if "|" in full_id else full_id
-                    loc = self.locations.get(pc_name, pc_name)
+                    loc = self.locations.get(pc_name.lower(), pc_name)
                     display = f"🟢 {logic_id} ({loc})" if loc else f"🟢 {logic_id}"
                 else:
                     display = f"⚪ {logic_id}"
@@ -1054,7 +1054,8 @@ if __name__ == "__main__":
             with urllib.request.urlopen(req, timeout=2.0) as r:
                 import json
                 locs = json.loads(r.read().decode())
-                room_name = locs.get(COMPUTER_NAME, COMPUTER_NAME)
+                locs_lower = {k.lower(): v for k, v in locs.items()}
+                room_name = locs_lower.get(COMPUTER_NAME.lower(), COMPUTER_NAME)
         except Exception as e:
             print(f"Could not load locations: {e}")
             
