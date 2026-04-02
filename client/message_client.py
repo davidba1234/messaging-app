@@ -555,7 +555,7 @@ class MainWindow(QMainWindow):
                 self.send_btn.setEnabled(True)
                 self.msg_input.setEnabled(True)
                 self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
-            elif self.current_chat in self.online_users:
+            elif self.current_chat in self.online_users or any((u.split("|")[0] if "|" in u else u) == self.current_chat for u in self.online_users):
                 self.send_btn.setEnabled(True)
                 self.msg_input.setEnabled(True)
                 self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
