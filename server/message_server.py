@@ -212,6 +212,57 @@ async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
             return [dict(r) for r in reversed(rows)]
 
 
+async def db_get_global_direct_history(username: str, limit: int = 500) -> list[dict]:
+    today_start = datetime.now(AUCKLAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("""
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, m.parent_id, GROUP_CONCAT(r.recipient) AS recipient
+            FROM messages m
+            JOIN message_recipients r ON m.id = r.msg_id
+            WHERE (m.sender=? OR r.recipient=?)
+              AND m.group_name IS NULL
+              AND m.timestamp >= ?
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+        """, (username, username, today_start, limit)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+
+async def db_get_global_group_history(logic_user: str, limit: int = 500) -> list[dict]:
+    today_start = datetime.now(AUCKLAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    all_groups = get_groups()
+    my_groups = ["Everyone"]
+    for g_name, members in all_groups.items():
+        if "*" in members or any(m.lower() == logic_user.lower() for m in members):
+            my_groups.append(g_name)
+            
+    async with get_db_async() as conn:
+        conn.row_factory = aiosqlite.Row
+        placeholders = ','.join('?' * len(my_groups))
+        query = f"""
+            SELECT m.id, m.sender, m.group_name, m.content, m.timestamp, m.parent_id
+            FROM messages m
+            LEFT JOIN message_recipients r ON m.id = r.msg_id
+            WHERE m.timestamp >= ? AND m.group_name IS NOT NULL
+              AND (
+                 m.group_name IN ({placeholders})
+                 OR r.recipient = ?
+                 OR m.sender = ?
+              )
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+        """
+        params = [today_start] + my_groups + [logic_user, logic_user, limit]
+        async with conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+
+
 # ═══════════════════════════════════════════════════════════════
 # Groups (loaded from JSON config file)
 # ═══════════════════════════════════════════════════════════════
@@ -433,9 +484,7 @@ async def _handle_message(sender: str, data: dict):
             # ── Group message → fan-out ──
             online_logic_ids = {get_logic_id(k) for k in mgr.active.keys()}
             
-            # Ensure the sender gets the live broadcast on their other PCs
-            if logic_sender not in members:
-                members.append(logic_sender)
+            # (Feature removed: We no longer auto-add the sender to the members list for live-syncing to other PCs, to prevent shared accounts popping up on every desk).
                 
             # If this is a reply, we must include the original sender too so they can see replies
             if parent_id:
@@ -474,30 +523,29 @@ async def _handle_message(sender: str, data: dict):
 
     elif recipient:
         # ── Direct message ──
-        logic_recipient = get_logic_id(recipient)
+        recipient_list = [r.strip() for r in recipient.split(",")] if "," in recipient else [recipient]
+        logic_recipients = [get_logic_id(r) for r in recipient_list]
         
-        # Check if recipient is online
-        is_online = any(get_logic_id(k) == logic_recipient for k in mgr.active.keys())
-        if not is_online:
-            await mgr.send_to(sender, {
-                "type": "error", "message": f"User {recipient} is offline. Message not sent."
+        # Save one message with all intended recipients
+        msg_id = await db_save_message(logic_sender, logic_recipients, content, parent_id=parent_id)
+        
+        # Status checks will be updated based on logic delivery success
+        for logic_rec in logic_recipients:
+            ok = await mgr.send_to_logic(logic_rec, {
+                "type": "message", "id": msg_id,
+                "sender": sender,
+                "recipient": logic_rec,
+                "group_name": None, "content": content,
+                "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
+                "parent_id": parent_id,
             })
-            return
-
-        msg_id = await db_save_message(logic_sender, [logic_recipient], content, parent_id=parent_id)
-        ok = await mgr.send_to(recipient, {
-            "type": "message", "id": msg_id,
-            "sender": sender,
-            "recipient": logic_recipient,
-            "group_name": None, "content": content,
-            "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
-            "parent_id": parent_id,
-        })
-        status = "delivered" if ok else "queued"
-        await db_update_status(msg_id, status, logic_recipient)
+            status = "delivered" if ok else "queued"
+            await db_update_status(msg_id, status, logic_rec)
+        
         await mgr.send_to(sender, {
             "type": "message_sent", "message_id": msg_id,
-            "recipient": logic_recipient, "status": status,
+            "recipient": logic_recipients[0] if len(logic_recipients) == 1 else "multiple",
+            "status": "sent" if len(logic_recipients) > 1 else status,
         })
 
 
@@ -535,10 +583,43 @@ async def _handle_typing_reply(sender: str, data: dict):
 
 async def _handle_history(sender: str, data: dict):
     logic_user = get_logic_id(sender)
+    
+    if data.get("with_global"):
+        dm_history = await db_get_global_direct_history(logic_user)
+        group_history = await db_get_global_group_history(logic_user)
+        await mgr.send_to(sender, {
+            "type": "global_history_response",
+            "direct_messages": dm_history,
+            "group_messages": group_history,
+        })
+        return
+
     group = data.get("with_group")
     if group:
         current_groups = get_groups()
         if group == "Everyone" or group in current_groups or group.startswith("AdHoc|"):
+            if group.startswith("AdHoc|"):
+                members = group.split("|")[1].split(",")
+            else:
+                members = await resolve_group_members(group)
+                
+            is_member = any(m.lower() == logic_user.lower() for m in members)
+            
+            if not is_member:
+                await mgr.send_to(sender, {
+                    "type":       "history_response",
+                    "with_group": group,
+                    "messages":   [{
+                        "id": -1,
+                        "sender": "System",
+                        "group_name": group,
+                        "content": "You are not a member of this group. Chat history is hidden.",
+                        "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
+                        "parent_id": None
+                    }],
+                })
+                return
+
             history = await db_get_group_history(group)
             await mgr.send_to(sender, {
                 "type":       "history_response",

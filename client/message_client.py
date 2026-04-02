@@ -297,7 +297,8 @@ class MainWindow(QMainWindow):
         self.chat_is_group = False
         self.current_reply_parent: int | None = None
         self.collapsed_threads: set[int] = set()
-        self.current_messages: list[dict] = []
+        self.dm_messages: list[dict] = []
+        self.group_messages: list[dict] = []
         self.popups: list[PopupNotification] = []
 
         self._build_ui()
@@ -336,16 +337,27 @@ class MainWindow(QMainWindow):
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 8, 8, 8)
 
-        self.chat_header = QLabel("Select a contact or group")
+        self.chat_header = QLabel("Select a contact or check boxes to compose")
         self.chat_header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         self.chat_header.setStyleSheet("padding:8px;color:#333;")
         rl.addWidget(self.chat_header)
 
-        self.chat_view = QTextBrowser()
-        self.chat_view.setFont(QFont("Segoe UI", 10))
-        self.chat_view.setOpenExternalLinks(False)
-        self.chat_view.anchorClicked.connect(self._on_anchor_clicked)
-        rl.addWidget(self.chat_view, stretch=1)
+        from PyQt6.QtWidgets import QTabWidget
+        self.tabs = QTabWidget()
+        
+        self.dm_view = QTextBrowser()
+        self.dm_view.setFont(QFont("Segoe UI", 10))
+        self.dm_view.setOpenExternalLinks(False)
+        self.dm_view.anchorClicked.connect(self._on_anchor_clicked)
+        
+        self.group_view = QTextBrowser()
+        self.group_view.setFont(QFont("Segoe UI", 10))
+        self.group_view.setOpenExternalLinks(False)
+        self.group_view.anchorClicked.connect(self._on_anchor_clicked)
+        
+        self.tabs.addTab(self.dm_view, "Direct Messages")
+        self.tabs.addTab(self.group_view, "Group Messages")
+        rl.addWidget(self.tabs, stretch=1)
 
         # compose row
         compose = QVBoxLayout()
@@ -465,6 +477,7 @@ class MainWindow(QMainWindow):
         if ok:
             self.status.setText("🟢  Connected")
             self.status.setStyleSheet("color:#34a853;")
+            self.ws.send({"type": "history_request", "with_global": True})
         else:
             self.status.setText("🔴  Disconnected — reconnecting…")
             self.status.setStyleSheet("color:#ea4335;")
@@ -482,20 +495,36 @@ class MainWindow(QMainWindow):
         return checked
 
     def _tree_item_clicked(self, item: QTreeWidgetItem, col: int):
+        import time
+        if hasattr(self, '_last_checkbox_toggle_time') and time.time() - self._last_checkbox_toggle_time < 0.05:
+            return
+            
         self.tree.blockSignals(True)
         for i in range(self.tree.topLevelItemCount()):
             tli = self.tree.topLevelItem(i)
             tli.setCheckState(0, Qt.CheckState.Unchecked)
             for j in range(tli.childCount()):
                 tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
-        item.setCheckState(0, Qt.CheckState.Checked)
-        if item.childCount() > 0:
-            for j in range(item.childCount()):
-                item.child(j).setCheckState(0, Qt.CheckState.Checked)
+                
+        if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
+            item.setCheckState(0, Qt.CheckState.Checked)
+            for i in range(1, self.tree.topLevelItemCount()):
+                tli = self.tree.topLevelItem(i)
+                tli.setCheckState(0, Qt.CheckState.Checked)
+                for j in range(tli.childCount()):
+                    tli.child(j).setCheckState(0, Qt.CheckState.Checked)
+        else:
+            item.setCheckState(0, Qt.CheckState.Checked)
+            if item.childCount() > 0:
+                for j in range(item.childCount()):
+                    item.child(j).setCheckState(0, Qt.CheckState.Checked)
+                    
         self.tree.blockSignals(False)
         self._update_ad_hoc_selection()
 
     def _tree_item_checked(self, item: QTreeWidgetItem, col: int):
+        import time
+        self._last_checkbox_toggle_time = time.time()
         self.tree.blockSignals(True)
         state = item.checkState(0)
         
@@ -522,7 +551,11 @@ class MainWindow(QMainWindow):
             self.msg_input.setEnabled(True)
             self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
         elif self.current_chat:
-            if self.current_chat in self.online_users:
+            if "," in self.current_chat:
+                self.send_btn.setEnabled(True)
+                self.msg_input.setEnabled(True)
+                self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
+            elif self.current_chat in self.online_users:
                 self.send_btn.setEnabled(True)
                 self.msg_input.setEnabled(True)
                 self.msg_input.setPlaceholderText("Type a message…   (Enter → send · Shift+Enter → new line)")
@@ -535,12 +568,11 @@ class MainWindow(QMainWindow):
         checked_full_ids = self._get_checked_users()
         
         if not checked_full_ids:
-            self.chat_header.setText("Select a contact or check boxes to chat")
+            self.chat_header.setText("Select a contact or check boxes to compose")
             self.current_chat = None
             self.chat_is_group = False
             self.send_btn.setEnabled(False)
             self.msg_input.setEnabled(False)
-            self.chat_view.clear()
             self._set_reply_parent(None)
             return
 
@@ -552,8 +584,7 @@ class MainWindow(QMainWindow):
             self.chat_is_group = False
             username = full_id.split("|")[0] if "|" in full_id else full_id
             dot = "🟢" if full_id in self.online_users else "⚪"
-            self.chat_header.setText(f"{dot} Chat with {username}")
-            self.ws.send({"type": "history_request", "with_user": full_id})
+            self.chat_header.setText(f"{dot} Compose: {username}")
             self._update_send_permission()
             return
             
@@ -575,17 +606,15 @@ class MainWindow(QMainWindow):
         if cat_match:
             self.current_chat = cat_match
             self.chat_is_group = True
-            self.chat_header.setText(f"👥 Group: {cat_match}")
-            self.ws.send({"type": "history_request", "with_group": cat_match})
+            self.chat_header.setText(f"👥 Compose to Group: {cat_match}")
         else:
             sorted_logic = sorted(set(logic_ids))
-            self.current_chat = "AdHoc|" + ",".join(sorted_logic)
-            self.chat_is_group = True
+            self.current_chat = ",".join(sorted_logic)
+            self.chat_is_group = False
             if len(sorted_logic) <= 3:
-                self.chat_header.setText(f"👥 Custom: {', '.join(sorted_logic)}")
+                self.chat_header.setText(f"📨 Compose Directed: {', '.join(sorted_logic)}")
             else:
-                self.chat_header.setText(f"👥 Custom: {len(sorted_logic)} recipients")
-            self.ws.send({"type": "history_request", "with_group": self.current_chat})
+                self.chat_header.setText(f"📨 Compose Directed: {len(sorted_logic)} recipients")
             
         self._update_send_permission()
 
@@ -598,7 +627,7 @@ class MainWindow(QMainWindow):
             self.reply_indicator_widget.hide()
             self.send_btn.setText("New Thread  📤" if self.chat_is_group else "Send  📤")
         else:
-            orig = next((m for m in self.current_messages if m["id"] == msg_id), None)
+            orig = next((m for m in self.dm_messages + self.group_messages if m["id"] == msg_id), None)
             sender = orig["sender"] if orig else "thread"
             if "|" in sender: sender = sender.split("|", 1)[0]
             self.reply_label.setText(f"Replying to {sender}'s thread")
@@ -617,7 +646,8 @@ class MainWindow(QMainWindow):
                 self.collapsed_threads.remove(msg_id)
             else:
                 self.collapsed_threads.add(msg_id)
-            self._render_chat()
+            self._render_chat(self.dm_view, self.dm_messages)
+            self._render_chat(self.group_view, self.group_messages)
 
     # ── sending ──────────────────────────────────────────────
 
@@ -643,12 +673,17 @@ class MainWindow(QMainWindow):
             "id": int(time.time() * 1000) * -1,
             "sender": UNIQUE_ID,
             "content": text,
+            "recipient": self.current_chat if not self.chat_is_group else None,
             "group_name": self.current_chat if self.chat_is_group else None,
             "timestamp": get_auckland_time().isoformat(),
             "parent_id": self.current_reply_parent
         }
-        self.current_messages.append(fake_msg)
-        self._render_chat()
+        if self.chat_is_group:
+            self.group_messages.append(fake_msg)
+            self._render_chat(self.group_view, self.group_messages)
+        else:
+            self.dm_messages.append(fake_msg)
+            self._render_chat(self.dm_view, self.dm_messages)
 
         self.msg_input.clear()
         self._set_reply_parent(None)
@@ -682,17 +717,17 @@ class MainWindow(QMainWindow):
             by = data.get("acknowledged_by", "")
             st = data.get("status", "")
             
-            # Don't show status update if viewing another direct chat
-            if by and not self.chat_is_group and self.current_chat != by:
-                return
-
+            # Since chat view is global, we don't mute notifications easily.
             icons = {"delivered": "✓✓ Sent but not yet seen",
                      "acknowledged": f"✅ Acknowledged by {by}",
                      "typing_reply": f"✍️ {by} is typing a reply"}
             self.status.setText(icons.get(st, st))
 
-        elif t == "history_response":
-            self._show_history(data)
+        elif t == "global_history_response":
+            self.dm_messages = data.get("direct_messages", [])
+            self.group_messages = data.get("group_messages", [])
+            self._render_chat(self.dm_view, self.dm_messages)
+            self._render_chat(self.group_view, self.group_messages)
 
     def _refresh_lists(self, data: dict):
         self.online_users = data.get("online_users", [])
@@ -784,47 +819,36 @@ class MainWindow(QMainWindow):
 
     def _on_incoming(self, data: dict):
         sender_raw = data["sender"]
-        if "|" in sender_raw:
-            sender_display, room = sender_raw.split("|", 1)
-            sender_name = f"{sender_display} ({room})"
-        else:
-            sender_name = sender_raw
-
         content   = data["content"]
         msg_id    = data["id"]
         grp       = data.get("group_name")
 
-        viewing = (
-            (not grp and self.current_chat == sender_raw and not self.chat_is_group)
-            or (grp and self.current_chat == grp and self.chat_is_group)
-        )
-
-        if viewing:
-            self.current_messages.append(data)
-            self._render_chat()
-            if self.status.text() == f"✍️ {sender_raw} is typing a reply":
-                self.status.setText("")
+        if grp:
+            self.group_messages.append(data)
+            self._render_chat(self.group_view, self.group_messages)
+        else:
+            self.dm_messages.append(data)
+            self._render_chat(self.dm_view, self.dm_messages)
+            
+        if self.status.text() == f"✍️ {sender_raw} is typing a reply":
+            self.status.setText("")
             
         parent_id = data.get("parent_id")
         if parent_id is not None and grp:
-            return # Suppress popup for replies to group messages. DMs still pop up!
+            return 
             
         self._popup(sender_raw, content, msg_id, grp)
 
-    def _show_history(self, data: dict):
-        self.current_messages = data.get("messages", [])
-        self._render_chat()
-
     # ── chat rendering ───────────────────────────────────────
 
-    def _render_chat(self):
-        self.chat_view.clear()
+    def _render_chat(self, target_view: QTextBrowser, messages: list[dict]):
+        target_view.clear()
         
-        msg_by_id = {m["id"]: m for m in self.current_messages}
+        msg_by_id = {m["id"]: m for m in messages}
         roots = []
-        children_map = {} # parent_id -> [messages]
+        children_map = {} 
         
-        for m in self.current_messages:
+        for m in messages:
             pid = m.get("parent_id")
             if not pid:
                 roots.append(m)
@@ -862,29 +886,41 @@ class MainWindow(QMainWindow):
         for root in roots:
             render_thread(root, 0, root["id"])
             
-        self.chat_view.setHtml("".join(html_blocks))
-        sb = self.chat_view.verticalScrollBar()
+        target_view.setHtml("".join(html_blocks))
+        sb = target_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def _format_msg(self, m: dict, depth: int = 0, has_children: bool = False, root_id: int | None = None) -> str:
         mine = m["sender"].split("|")[0] == USERNAME
         ts = m.get("timestamp", "")
-        time_str = get_auckland_time().strftime("%d-%m-%Y %H:%M")
+        time_str = get_auckland_time().strftime("%H:%M")
         if ts:
             try:
-                time_str = datetime.fromisoformat(ts).strftime("%d-%m-%Y %H:%M")
+                time_str = datetime.fromisoformat(ts).strftime("%H:%M")
             except Exception:
                 pass
         
         grp = m.get("group_name")
         sender_raw = m["sender"]
+        
         if "|" in sender_raw:
-            sender_display, room = sender_raw.split("|", 1)
-            sender_name = f"{sender_display} ({room})"
+            sender_logic, pc = sender_raw.split("|", 1)
+            loc = self.locations.get(pc.lower(), pc)
+            sender_name = f"{sender_raw} ({loc})" if loc else sender_raw
         else:
             sender_name = sender_raw
 
         name = "You" if mine else sender_name
+        
+        # Display Context Prefix (To: Recipient or [Group Name])
+        context_prefix = ""
+        if grp:
+            context_prefix = f"<span style='color:#777; font-size:10px;'>[Group: {html.escape(grp)}]</span> "
+        else:
+            recipient = m.get("recipient", "")
+            if recipient:
+                context_prefix = f"<span style='color:#777; font-size:10px;'>[To: {html.escape(recipient)}]</span> "
+
         status = m.get("status", "")
         
         indent = depth > 0
@@ -902,7 +938,7 @@ class MainWindow(QMainWindow):
         shift = 50 if indent else 8
         margin = f"margin: 4px 8px 4px {shift}px;"
             
-        max_w = "55%" if indent else "65%"
+        max_w = "60%" if indent else "70%"
         
         controls = ""
         can_reply = not (depth == 0 and mine)
@@ -914,18 +950,18 @@ class MainWindow(QMainWindow):
             sym = "[+]" if is_collapsed else "[-]"
             controls += f'<a href="toggle:{root_id}" style="text-decoration:none; color:#1a73e8; font-size:11px; margin-right:4px;">{sym}</a>'
 
-        return f"""
+        return f'''
         <div style="text-align:{align}; {margin}">
           <div style="display:inline-block;background:{bg};color:{fg};
                       padding:8px 14px;border-radius:14px;max-width:{max_w};
                       text-align:left;font-size:13px;">
-            <b style="font-size:11px;">{html.escape(name)}</b>
+            {context_prefix}<b style="font-size:11px;">{html.escape(name)}</b>
             <span style="font-size:9px;opacity:.7;"> {time_str}</span>
             <span style="margin-left:10px;">{controls}</span><br>
             {safe}
             <span style="font-size:9px;opacity:.7;"> {st}</span>
           </div>
-        </div>"""
+        </div>'''
 
     # ── popup notifications ──────────────────────────────────
 
