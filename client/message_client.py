@@ -50,28 +50,79 @@ def load_config() -> str:
         return ""
     config = configparser.ConfigParser()
     config.read(CONFIG_FILE)
-    return config.get("Server", "host", fallback="")
+    if config.has_section("Server"):
+        return config.get("Server", "host", fallback="")
+    return ""
 
 def save_config(host: str):
     config = configparser.ConfigParser()
-    config["Server"] = {"host": host}
+    if CONFIG_FILE.exists():
+        config.read(CONFIG_FILE)
+    if not config.has_section("Server"):
+        config.add_section("Server")
+    config.set("Server", "host", host)
+    with open(CONFIG_FILE, "w") as f:
+        config.write(f)
+
+def load_last_username() -> str:
+    if not CONFIG_FILE.exists():
+        return ""
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    if config.has_section("User"):
+        return config.get("User", "last_name", fallback="")
+    return ""
+
+def save_last_username(name: str):
+    config = configparser.ConfigParser()
+    if CONFIG_FILE.exists():
+        config.read(CONFIG_FILE)
+    if not config.has_section("User"):
+        config.add_section("User")
+    config.set("User", "last_name", name)
     with open(CONFIG_FILE, "w") as f:
         config.write(f)
 
 import getpass
 try:
-    USERNAME = os.environ.get("USERNAME") or os.getlogin()
+    WIN_USERNAME = os.environ.get("USERNAME") or os.getlogin()
 except OSError:
-    USERNAME = getpass.getuser()
+    WIN_USERNAME = getpass.getuser()
+
+USERNAME = WIN_USERNAME
 
 # Get the Windows Computer Name (e.g., "SURGERY-PC")
 COMPUTER_NAME = socket.gethostname()
 
 # The unique technical ID for the server
+room_name = COMPUTER_NAME
 UNIQUE_ID = f"{USERNAME}|{COMPUTER_NAME}"
 
 HOST = load_config()
 PORT = 8765
+
+class LoginDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("User Login")
+        self.setFixedSize(350, 150)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("This is a shared workstation.\nPlease enter your name to log in."))
+        
+        form = QFormLayout()
+        self.name_input = QLineEdit()
+        self.name_input.setText(load_last_username())
+        self.name_input.setPlaceholderText("e.g. Sarah")
+        form.addRow("Your Name:", self.name_input)
+        layout.addLayout(form)
+        
+        btn = QPushButton("Login")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
+
+    def get_name(self) -> str:
+        return self.name_input.text().strip()
 
 class ConfigDialog(QDialog):
     def __init__(self, parent=None):
@@ -196,6 +247,7 @@ class PopupNotification(QDialog):
         self.sender = sender
         self.group_name = group_name
         self.main_window = main_window
+        self.drag_position = None
 
         self.setWindowTitle("New Message")
         self.setWindowFlags(
@@ -276,6 +328,16 @@ class PopupNotification(QDialog):
         self.reply_clicked.emit(self.sender, self.group_name or "", self.msg_id)
         self.close()
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, 'drag_position') and self.drag_position is not None:
+            self.move(event.globalPosition().toPoint() - self.drag_position)
+            event.accept()
+
 
 # ═══════════════════════════════════════════════════════════════
 # Main Window
@@ -323,6 +385,19 @@ class MainWindow(QMainWindow):
         ll.setContentsMargins(8, 8, 4, 8)
 
         ll.addWidget(self._section_label("DIRECTORY"))
+        
+        # Switch User Button
+        btn_layout = QHBoxLayout()
+        self.switch_user_btn = QPushButton("Switch User")
+        self.switch_user_btn.setStyleSheet("""
+            QPushButton{background:#e0e0e0;color:#333;border:none;padding:6px;border-radius:4px;font-weight:bold;}
+            QPushButton:hover{background:#d0d0d0;}
+        """)
+        self.switch_user_btn.clicked.connect(self._switch_user)
+        btn_layout.addWidget(self.switch_user_btn)
+        btn_layout.addStretch()
+        ll.addLayout(btn_layout)
+        
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.itemClicked.connect(self._tree_item_clicked)
@@ -1058,6 +1133,30 @@ class MainWindow(QMainWindow):
         self.ws.wait(3000)
         QApplication.quit()
 
+    def _switch_user(self):
+        global USERNAME, UNIQUE_ID, room_name
+        
+        dlg = LoginDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_name = dlg.get_name()
+            if new_name:
+                save_last_username(new_name)
+                USERNAME = new_name
+                UNIQUE_ID = f"{USERNAME}|{room_name}"
+                
+                # Update UI
+                self.setWindowTitle(f"Office Messenger — {USERNAME}")
+                self.tray.setToolTip(f"Office Messenger — {USERNAME}")
+                
+                # Restart WS
+                if hasattr(self, 'ws') and self.ws:
+                    self.ws.stop()
+                    self.ws.wait()
+                
+                self.current_messages.clear()
+                self.chat_view.clear()
+                self._start_ws()
+
 
 # ═══════════════════════════════════════════════════════════════
 # Launch
@@ -1095,6 +1194,19 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Could not load locations: {e}")
             
+    SHARED_ACCOUNTS = ['reception', 'admin', 'nurse', 'officenurse']
+    if WIN_USERNAME.lower() in SHARED_ACCOUNTS:
+        login = LoginDialog()
+        if login.exec() == QDialog.DialogCode.Accepted:
+            new_name = login.get_name()
+            if new_name:
+                save_last_username(new_name)
+                USERNAME = new_name
+            else:
+                sys.exit(0)
+        else:
+            sys.exit(0)
+
     UNIQUE_ID = f"{USERNAME}|{room_name}"
 
     win = MainWindow()
