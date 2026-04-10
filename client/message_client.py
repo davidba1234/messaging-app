@@ -96,7 +96,7 @@ COMPUTER_NAME = socket.gethostname()
 
 # The unique technical ID for the server
 room_name = COMPUTER_NAME
-UNIQUE_ID = f"{USERNAME}|{COMPUTER_NAME}"
+UNIQUE_ID = f"{USERNAME}|{COMPUTER_NAME}|{WIN_USERNAME}"
 
 HOST = load_config()
 PORT = 8765
@@ -574,25 +574,37 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_last_checkbox_toggle_time') and time.time() - self._last_checkbox_toggle_time < 0.05:
             return
             
+        modifiers = QApplication.keyboardModifiers()
+        shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
         self.tree.blockSignals(True)
-        for i in range(self.tree.topLevelItemCount()):
-            tli = self.tree.topLevelItem(i)
-            tli.setCheckState(0, Qt.CheckState.Unchecked)
-            for j in range(tli.childCount()):
-                tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
+        
+        new_state = Qt.CheckState.Checked if item.checkState(0) == Qt.CheckState.Unchecked else Qt.CheckState.Unchecked
+        if not shift_pressed:
+            new_state = Qt.CheckState.Checked
+            for i in range(self.tree.topLevelItemCount()):
+                tli = self.tree.topLevelItem(i)
+                tli.setCheckState(0, Qt.CheckState.Unchecked)
+                for j in range(tli.childCount()):
+                    tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
                 
         if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
-            item.setCheckState(0, Qt.CheckState.Checked)
+            item.setCheckState(0, new_state)
             for i in range(1, self.tree.topLevelItemCount()):
                 tli = self.tree.topLevelItem(i)
-                tli.setCheckState(0, Qt.CheckState.Checked)
+                tli.setCheckState(0, new_state)
                 for j in range(tli.childCount()):
-                    tli.child(j).setCheckState(0, Qt.CheckState.Checked)
+                    tli.child(j).setCheckState(0, new_state)
         else:
-            item.setCheckState(0, Qt.CheckState.Checked)
+            item.setCheckState(0, new_state)
             if item.childCount() > 0:
                 for j in range(item.childCount()):
-                    item.child(j).setCheckState(0, Qt.CheckState.Checked)
+                    item.child(j).setCheckState(0, new_state)
+                    
+            if item.parent() is not None:
+                p = item.parent()
+                all_checked = all(p.child(i).checkState(0) == Qt.CheckState.Checked for i in range(p.childCount()))
+                p.setCheckState(0, Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
                     
         self.tree.blockSignals(False)
         self._update_ad_hoc_selection()
@@ -600,8 +612,20 @@ class MainWindow(QMainWindow):
     def _tree_item_checked(self, item: QTreeWidgetItem, col: int):
         import time
         self._last_checkbox_toggle_time = time.time()
+        
+        modifiers = QApplication.keyboardModifiers()
+        shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        
         self.tree.blockSignals(True)
         state = item.checkState(0)
+        
+        if not shift_pressed and state == Qt.CheckState.Checked:
+            for i in range(self.tree.topLevelItemCount()):
+                tli = self.tree.topLevelItem(i)
+                tli.setCheckState(0, Qt.CheckState.Unchecked)
+                for j in range(tli.childCount()):
+                    tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
+            item.setCheckState(0, Qt.CheckState.Checked)
         
         if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
             for i in range(1, self.tree.topLevelItemCount()):
@@ -840,12 +864,15 @@ class MainWindow(QMainWindow):
                 
             matching_full_ids = []
             for logic in cat_users:
-                online_matches = [u for u in self.online_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()]
-                if online_matches:
-                    matching_full_ids.extend(online_matches)
+                matched_users = []
+                for u in set(self.all_users + self.online_users):
+                    parts = u.split("|")
+                    if parts[0].lower() == logic.lower() or (len(parts) > 2 and parts[2].lower() == logic.lower()):
+                        matched_users.append(u)
+                if matched_users:
+                    matching_full_ids.extend(matched_users)
                 else:
-                    full_id = next((u for u in self.all_users if (u.split("|")[0] if "|" in u else u).lower() == logic.lower()), logic)
-                    matching_full_ids.append(full_id)
+                    matching_full_ids.append(logic)
 
             display_cat = cat.capitalize() if cat == "nurses" else cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
@@ -979,9 +1006,11 @@ class MainWindow(QMainWindow):
         sender_raw = m["sender"]
         
         if "|" in sender_raw:
-            sender_logic, pc = sender_raw.split("|", 1)
+            parts = sender_raw.split("|")
+            sender_logic = parts[0]
+            pc = parts[1] if len(parts) > 1 else sender_raw
             loc = self.locations.get(pc.lower(), pc)
-            sender_name = f"{sender_raw} ({loc})" if loc else sender_raw
+            sender_name = f"{sender_logic} ({loc})" if loc else sender_logic
         else:
             sender_name = sender_raw
 
@@ -1142,7 +1171,7 @@ class MainWindow(QMainWindow):
             if new_name:
                 save_last_username(new_name)
                 USERNAME = new_name
-                UNIQUE_ID = f"{USERNAME}|{room_name}"
+                UNIQUE_ID = f"{USERNAME}|{room_name}|{WIN_USERNAME}"
                 
                 # Update UI
                 self.setWindowTitle(f"Office Messenger — {USERNAME}")
@@ -1194,7 +1223,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Could not load locations: {e}")
             
-    SHARED_ACCOUNTS = ['reception', 'admin', 'nurse', 'officenurse']
+    SHARED_ACCOUNTS = ['reception', 'admin', 'nurse', 'officenurse', 'office']
     if WIN_USERNAME.lower() in SHARED_ACCOUNTS:
         login = LoginDialog()
         if login.exec() == QDialog.DialogCode.Accepted:
@@ -1207,7 +1236,7 @@ if __name__ == "__main__":
         else:
             sys.exit(0)
 
-    UNIQUE_ID = f"{USERNAME}|{room_name}"
+    UNIQUE_ID = f"{USERNAME}|{room_name}|{WIN_USERNAME}"
 
     win = MainWindow()
     win.show()

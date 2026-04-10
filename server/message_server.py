@@ -231,12 +231,12 @@ async def db_get_global_direct_history(username: str, limit: int = 500) -> list[
             return [dict(r) for r in reversed(rows)]
 
 
-async def db_get_global_group_history(logic_user: str, limit: int = 500) -> list[dict]:
+async def db_get_global_group_history(logic_user: str, win_user: str = "", limit: int = 500) -> list[dict]:
     today_start = datetime.now(AUCKLAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     all_groups = get_groups()
     my_groups = ["Everyone"]
     for g_name, members in all_groups.items():
-        if "*" in members or any(m.lower() == logic_user.lower() for m in members):
+        if "*" in members or any(m.lower() == logic_user.lower() for m in members) or (win_user and any(m.lower() == win_user.lower() for m in members)):
             my_groups.append(g_name)
             
     async with get_db_async() as conn:
@@ -494,7 +494,15 @@ async def _handle_message(sender: str, data: dict):
                     if orig_sender not in members:
                         members.append(orig_sender)
 
-            recipients = [m for m in members if m in online_logic_ids]
+            recipients = []
+            for active_full_id in mgr.active.keys():
+                parts = active_full_id.split("|")
+                logic_id = parts[0]
+                win_user = parts[2] if len(parts) > 2 else ""
+                if any(logic_id.lower() == m.lower() for m in members) or (win_user and any(win_user.lower() == m.lower() for m in members)):
+                    recipients.append(logic_id)
+                    
+            recipients = list(set(recipients))
             
             msg_id = await db_save_message(logic_sender, recipients, content, group_name, parent_id)
             
@@ -582,11 +590,13 @@ async def _handle_typing_reply(sender: str, data: dict):
 
 
 async def _handle_history(sender: str, data: dict):
-    logic_user = get_logic_id(sender)
+    parts = sender.split("|")
+    logic_user = parts[0]
+    win_user = parts[2] if len(parts) > 2 else ""
     
     if data.get("with_global"):
         dm_history = await db_get_global_direct_history(logic_user)
-        group_history = await db_get_global_group_history(logic_user)
+        group_history = await db_get_global_group_history(logic_user, win_user)
         await mgr.send_to(sender, {
             "type": "global_history_response",
             "direct_messages": dm_history,
@@ -603,7 +613,7 @@ async def _handle_history(sender: str, data: dict):
             else:
                 members = await resolve_group_members(group)
                 
-            is_member = any(m.lower() == logic_user.lower() for m in members)
+            is_member = any(m.lower() == logic_user.lower() for m in members) or (win_user and any(m.lower() == win_user.lower() for m in members))
             
             if not is_member:
                 await mgr.send_to(sender, {

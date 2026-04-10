@@ -9,6 +9,6 @@
   ],
 
   "nurses": ["nurse", "officenurse", "barbara", "dana", "rienie"],
-  "Admin": []
+  "Admin": ["reception", "office", "admin"]
 }
 
