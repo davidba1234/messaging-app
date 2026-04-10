@@ -864,15 +864,22 @@ class MainWindow(QMainWindow):
                 
             matching_full_ids = []
             for logic in cat_users:
-                matched_users = []
-                for u in set(self.all_users + self.online_users):
+                online_matches = []
+                for u in self.online_users:
                     parts = u.split("|")
                     if parts[0].lower() == logic.lower() or (len(parts) > 2 and parts[2].lower() == logic.lower()):
-                        matched_users.append(u)
-                if matched_users:
-                    matching_full_ids.extend(matched_users)
+                        online_matches.append(u)
+                        
+                if online_matches:
+                    matching_full_ids.extend(online_matches)
                 else:
-                    matching_full_ids.append(logic)
+                    offline_match = None
+                    for u in self.all_users:
+                        parts = u.split("|")
+                        if parts[0].lower() == logic.lower() or (len(parts) > 2 and parts[2].lower() == logic.lower()):
+                            offline_match = u
+                            break
+                    matching_full_ids.append(offline_match if offline_match else logic)
 
             display_cat = cat.capitalize() if cat == "nurses" else cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
