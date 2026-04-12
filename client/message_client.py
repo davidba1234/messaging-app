@@ -1189,8 +1189,10 @@ class MainWindow(QMainWindow):
                     self.ws.stop()
                     self.ws.wait()
                 
-                self.current_messages.clear()
-                self.chat_view.clear()
+                self.dm_messages.clear()
+                self.group_messages.clear()
+                self.dm_view.clear()
+                self.group_view.clear()
                 self._start_ws()
 
 
