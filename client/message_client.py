@@ -27,11 +27,11 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
     QTextBrowser, QTextEdit, QPushButton,
     QLabel, QSystemTrayIcon, QMenu, QSplitter, QMessageBox, QDialog,
-    QFrame, QLineEdit, QFormLayout
+    QFrame, QLineEdit, QFormLayout, QAction
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt5.QtGui import (
-    QIcon, QColor, QFont, QAction, QPixmap, QPainter, QKeyEvent, QCloseEvent,
+    QIcon, QColor, QFont, QPixmap, QPainter, QKeyEvent, QCloseEvent,
 )
 
 import websocket  # pip install websocket-client
@@ -330,12 +330,12 @@ class PopupNotification(QDialog):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.LeftButton and hasattr(self, 'drag_position') and self.drag_position is not None:
-            self.move(event.globalPosition().toPoint() - self.drag_position)
+            self.move(event.globalPos() - self.drag_position)
             event.accept()
 
 
