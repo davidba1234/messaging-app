@@ -734,6 +734,12 @@ class MainWindow(QMainWindow):
             self.send_btn.setText("Reply  📤")
             self.msg_input.setFocus()
             
+            if orig:
+                if orig.get("group_name"):
+                    self.tabs.setCurrentIndex(1)
+                else:
+                    self.tabs.setCurrentIndex(0)
+            
     def _on_anchor_clicked(self, url):
         target = url.toString()
         if target.startswith("reply:"):
@@ -853,14 +859,18 @@ class MainWindow(QMainWindow):
             if cat == "Other":
                 other_logic_ids = set()
                 cat_users = []
-                for u in self.all_users:
+                for u in self.online_users:
                     l_id = (u.split("|")[0] if "|" in u else u)
-                    if l_id.lower() not in inserted_logic_ids and l_id.lower() not in other_logic_ids:
+                    win = (u.split("|")[2] if len(u.split("|")) > 2 else "")
+                    
+                    if l_id.lower() not in inserted_logic_ids and win.lower() not in inserted_logic_ids and l_id.lower() not in other_logic_ids:
                         other_logic_ids.add(l_id.lower())
                         cat_users.append(l_id)
             else:
                 cat_users = self.categorized.get(cat, [])
                 if not cat_users and cat not in ["Doctors", "nurses", "Admin"]: continue
+                for c in cat_users:
+                    inserted_logic_ids.add(c.lower())
                 
             matching_full_ids = []
             for logic in cat_users:
