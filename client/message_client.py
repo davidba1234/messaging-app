@@ -22,16 +22,16 @@ try:
 except Exception:
     def get_auckland_time(): return datetime.now()
 
-from PyQt6.QtWidgets import (
+from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
     QTextBrowser, QTextEdit, QPushButton,
     QLabel, QSystemTrayIcon, QMenu, QSplitter, QMessageBox, QDialog,
-    QFrame, QLineEdit, QFormLayout
+    QFrame, QLineEdit, QFormLayout, QAction
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
-from PyQt6.QtGui import (
-    QIcon, QColor, QFont, QAction, QPixmap, QPainter, QKeyEvent, QCloseEvent,
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
+from PyQt5.QtGui import (
+    QIcon, QColor, QFont, QPixmap, QPainter, QKeyEvent, QCloseEvent,
 )
 
 import websocket  # pip install websocket-client
@@ -222,8 +222,8 @@ class MessageInput(QTextEdit):
     send_requested = pyqtSignal()
 
     def keyPressEvent(self, ev: QKeyEvent):
-        if ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if ev.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if ev.modifiers() & Qt.ShiftModifier:
                 super().keyPressEvent(ev)
             else:
                 self.send_requested.emit()
@@ -251,11 +251,11 @@ class PopupNotification(QDialog):
 
         self.setWindowTitle("New Message")
         self.setWindowFlags(
-            Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Dialog
+            Qt.WindowStaysOnTopHint
+            | Qt.FramelessWindowHint
+            | Qt.Dialog
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedWidth(380)
 
         lo = QVBoxLayout(self)
@@ -264,13 +264,13 @@ class PopupNotification(QDialog):
         # header
         hdr = f"📨  {group_name}" if group_name else "📨  Direct Message"
         h = QLabel(hdr)
-        h.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        h.setFont(QFont("Segoe UI", 11, QFont.Bold))
         h.setStyleSheet("color:#1a73e8;")
         lo.addWidget(h)
 
         lo.addWidget(QLabel(f"From:  {sender}"))
 
-        line = QFrame(); line.setFrameShape(QFrame.Shape.HLine)
+        line = QFrame(); line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("color:#ddd;")
         lo.addWidget(line)
 
@@ -329,13 +329,13 @@ class PopupNotification(QDialog):
         self.close()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        if event.button() == Qt.LeftButton:
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, 'drag_position') and self.drag_position is not None:
-            self.move(event.globalPosition().toPoint() - self.drag_position)
+        if event.buttons() == Qt.LeftButton and hasattr(self, 'drag_position') and self.drag_position is not None:
+            self.move(event.globalPos() - self.drag_position)
             event.accept()
 
 
@@ -375,7 +375,7 @@ class MainWindow(QMainWindow):
         main = QHBoxLayout(root)
         main.setContentsMargins(0, 0, 0, 0)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Horizontal)
 
         # LEFT — contact & group lists
         left = QWidget()
@@ -413,11 +413,11 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(4, 8, 8, 8)
 
         self.chat_header = QLabel("Select a contact or check boxes to compose")
-        self.chat_header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self.chat_header.setFont(QFont("Segoe UI", 13, QFont.Bold))
         self.chat_header.setStyleSheet("padding:8px;color:#333;")
         rl.addWidget(self.chat_header)
 
-        from PyQt6.QtWidgets import QTabWidget
+        from PyQt5.QtWidgets import QTabWidget
         self.tabs = QTabWidget()
         
         self.dm_view = QTextBrowser()
@@ -502,7 +502,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _section_label(text: str) -> QLabel:
         lb = QLabel(f"  {text}")
-        lb.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        lb.setFont(QFont("Segoe UI", 9, QFont.Bold))
         lb.setStyleSheet("color:#888;padding-top:4px;")
         return lb
 
@@ -512,13 +512,13 @@ class MainWindow(QMainWindow):
         px = QPixmap(32, 32)
         px.fill(QColor(0, 0, 0, 0))
         p = QPainter(px)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.Antialiasing)
         p.setBrush(QColor("#1a73e8"))
-        p.setPen(Qt.PenStyle.NoPen)
+        p.setPen(Qt.NoPen)
         p.drawEllipse(2, 2, 28, 28)
         p.setPen(QColor("white"))
-        p.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
-        p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, "M")
+        p.setFont(QFont("Segoe UI", 15, QFont.Bold))
+        p.drawText(px.rect(), Qt.AlignCenter, "M")
         p.end()
 
         icon = QIcon(px)
@@ -534,7 +534,7 @@ class MainWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(
             lambda r: self._raise()
-            if r == QSystemTrayIcon.ActivationReason.DoubleClick else None
+            if r == QSystemTrayIcon.DoubleClick else None
         )
         self.tray.setToolTip(f"Office Messenger — {USERNAME}")
         self.tray.show()
@@ -565,8 +565,8 @@ class MainWindow(QMainWindow):
             tli = self.tree.topLevelItem(i)
             for j in range(tli.childCount()):
                 child = tli.child(j)
-                if child.checkState(0) == Qt.CheckState.Checked:
-                    checked.append(child.data(0, Qt.ItemDataRole.UserRole))
+                if child.checkState(0) == Qt.Checked:
+                    checked.append(child.data(0, Qt.UserRole))
         return checked
 
     def _tree_item_clicked(self, item: QTreeWidgetItem, col: int):
@@ -575,18 +575,18 @@ class MainWindow(QMainWindow):
             return
             
         modifiers = QApplication.keyboardModifiers()
-        shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        shift_pressed = bool(modifiers & Qt.ShiftModifier)
 
         self.tree.blockSignals(True)
         
-        new_state = Qt.CheckState.Checked if item.checkState(0) == Qt.CheckState.Unchecked else Qt.CheckState.Unchecked
+        new_state = Qt.Checked if item.checkState(0) == Qt.Unchecked else Qt.Unchecked
         if not shift_pressed:
-            new_state = Qt.CheckState.Checked
+            new_state = Qt.Checked
             for i in range(self.tree.topLevelItemCount()):
                 tli = self.tree.topLevelItem(i)
-                tli.setCheckState(0, Qt.CheckState.Unchecked)
+                tli.setCheckState(0, Qt.Unchecked)
                 for j in range(tli.childCount()):
-                    tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
+                    tli.child(j).setCheckState(0, Qt.Unchecked)
                 
         if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
             item.setCheckState(0, new_state)
@@ -603,8 +603,8 @@ class MainWindow(QMainWindow):
                     
             if item.parent() is not None:
                 p = item.parent()
-                all_checked = all(p.child(i).checkState(0) == Qt.CheckState.Checked for i in range(p.childCount()))
-                p.setCheckState(0, Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
+                all_checked = all(p.child(i).checkState(0) == Qt.Checked for i in range(p.childCount()))
+                p.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
                     
         self.tree.blockSignals(False)
         self._update_ad_hoc_selection()
@@ -614,18 +614,18 @@ class MainWindow(QMainWindow):
         self._last_checkbox_toggle_time = time.time()
         
         modifiers = QApplication.keyboardModifiers()
-        shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        shift_pressed = bool(modifiers & Qt.ShiftModifier)
         
         self.tree.blockSignals(True)
         state = item.checkState(0)
         
-        if not shift_pressed and state == Qt.CheckState.Checked:
+        if not shift_pressed and state == Qt.Checked:
             for i in range(self.tree.topLevelItemCount()):
                 tli = self.tree.topLevelItem(i)
-                tli.setCheckState(0, Qt.CheckState.Unchecked)
+                tli.setCheckState(0, Qt.Unchecked)
                 for j in range(tli.childCount()):
-                    tli.child(j).setCheckState(0, Qt.CheckState.Unchecked)
-            item.setCheckState(0, Qt.CheckState.Checked)
+                    tli.child(j).setCheckState(0, Qt.Unchecked)
+            item.setCheckState(0, Qt.Checked)
         
         if item.parent() is None and item.text(0) == "🌎 Send to Everyone":
             for i in range(1, self.tree.topLevelItemCount()):
@@ -638,8 +638,8 @@ class MainWindow(QMainWindow):
                 item.child(i).setCheckState(0, state)
         else:
             p = item.parent()
-            all_checked = all(p.child(i).checkState(0) == Qt.CheckState.Checked for i in range(p.childCount()))
-            p.setCheckState(0, Qt.CheckState.Checked if all_checked else Qt.CheckState.Unchecked)
+            all_checked = all(p.child(i).checkState(0) == Qt.Checked for i in range(p.childCount()))
+            p.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
 
         self.tree.blockSignals(False)
         self._update_ad_hoc_selection()
@@ -692,8 +692,8 @@ class MainWindow(QMainWindow):
         cat_match = None
         for i in range(1, self.tree.topLevelItemCount()):
             cat_item = self.tree.topLevelItem(i)
-            cat_name = cat_item.data(0, Qt.ItemDataRole.UserRole).split(":")[1] if cat_item.data(0, Qt.ItemDataRole.UserRole) else ""
-            cat_children = [cat_item.child(j).data(0, Qt.ItemDataRole.UserRole) for j in range(cat_item.childCount())]
+            cat_name = cat_item.data(0, Qt.UserRole).split(":")[1] if cat_item.data(0, Qt.UserRole) else ""
+            cat_children = [cat_item.child(j).data(0, Qt.UserRole) for j in range(cat_item.childCount())]
             if set(cat_children) == set(checked_full_ids) and len(cat_children) > 0:
                 cat_match = cat_name
                 break
@@ -842,8 +842,8 @@ class MainWindow(QMainWindow):
 
         # Send to Everyone node
         everyone = QTreeWidgetItem(["🌎 Send to Everyone"])
-        everyone.setFlags(everyone.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        everyone.setCheckState(0, Qt.CheckState.Unchecked)
+        everyone.setFlags(everyone.flags() | Qt.ItemIsUserCheckable)
+        everyone.setCheckState(0, Qt.Unchecked)
         self.tree.addTopLevelItem(everyone)
 
         cats = ["Doctors", "nurses", "Admin", "Management"]
@@ -883,9 +883,9 @@ class MainWindow(QMainWindow):
 
             display_cat = cat.capitalize() if cat == "nurses" else cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
-            cat_item.setData(0, Qt.ItemDataRole.UserRole, f"CAT:{display_cat}")
-            cat_item.setFlags(cat_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            cat_item.setCheckState(0, Qt.CheckState.Unchecked)
+            cat_item.setData(0, Qt.UserRole, f"CAT:{display_cat}")
+            cat_item.setFlags(cat_item.flags() | Qt.ItemIsUserCheckable)
+            cat_item.setCheckState(0, Qt.Unchecked)
             
             all_children_checked = True and len(matching_full_ids) > 0
             filtered_full_ids = [u for u in matching_full_ids if u != UNIQUE_ID]
@@ -903,10 +903,10 @@ class MainWindow(QMainWindow):
                     display = f"⚪ {logic_id}"
                     
                 it = QTreeWidgetItem([display])
-                it.setData(0, Qt.ItemDataRole.UserRole, full_id)
-                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setData(0, Qt.UserRole, full_id)
+                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
                 is_checked = full_id in checked_users
-                it.setCheckState(0, Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+                it.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
                 if not is_checked: all_children_checked = False
                 
                 if not on:
@@ -920,7 +920,7 @@ class MainWindow(QMainWindow):
             if filtered_full_ids or cat != "Other":
                 self.tree.addTopLevelItem(cat_item)
                 if all_children_checked and filtered_full_ids:
-                    cat_item.setCheckState(0, Qt.CheckState.Checked)
+                    cat_item.setCheckState(0, Qt.Checked)
                 cat_item.setExpanded(True)
             
         self.tree.blockSignals(False)
@@ -1080,7 +1080,7 @@ class MainWindow(QMainWindow):
         # self.tray.showMessage(
         #     f"Message from {sender}" + (f" ({grp})" if grp else ""),
         #     content[:150],
-        #     QSystemTrayIcon.MessageIcon.Information, 5000,
+        #     QSystemTrayIcon.Information, 5000,
         # )
 
         if len(self.popups) >= 3:
@@ -1113,7 +1113,7 @@ class MainWindow(QMainWindow):
             tli = self.tree.topLevelItem(i)
             for j in range(tli.childCount()):
                 child = tli.child(j)
-                if child.text(0) == username or child.data(0, Qt.ItemDataRole.UserRole) == username:
+                if child.text(0) == username or child.data(0, Qt.UserRole) == username:
                     found_item = child
                     break
             if found_item: break
@@ -1130,7 +1130,7 @@ class MainWindow(QMainWindow):
             found_item = None
             for i in range(1, self.tree.topLevelItemCount()):
                 tli = self.tree.topLevelItem(i)
-                if tli.data(0, Qt.ItemDataRole.UserRole) == f"CAT:{group_name}":
+                if tli.data(0, Qt.UserRole) == f"CAT:{group_name}":
                     found_item = tli
                     break
             if found_item:
@@ -1150,7 +1150,7 @@ class MainWindow(QMainWindow):
     def _raise(self):
         self.show()
         if self.isMinimized():
-            self.setWindowState(Qt.WindowState.WindowNoState)
+            self.setWindowState(Qt.WindowNoState)
             self.showNormal()
         self.activateWindow()
         self.raise_()
@@ -1161,7 +1161,7 @@ class MainWindow(QMainWindow):
         self.tray.showMessage(
             "Office Messenger",
             "Still running — double-click the tray icon to open.",
-            QSystemTrayIcon.MessageIcon.Information, 3000,
+            QSystemTrayIcon.Information, 3000,
         )
 
     def _quit(self):
@@ -1173,7 +1173,7 @@ class MainWindow(QMainWindow):
         global USERNAME, UNIQUE_ID, room_name
         
         dlg = LoginDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        if dlg.exec() == QDialog.Accepted:
             new_name = dlg.get_name()
             if new_name:
                 save_last_username(new_name)
@@ -1208,7 +1208,7 @@ if __name__ == "__main__":
 
     if not HOST:
         dialog = ConfigDialog()
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             new_host = dialog.get_ip()
             if new_host:
                 save_config(new_host)
@@ -1235,7 +1235,7 @@ if __name__ == "__main__":
     SHARED_ACCOUNTS = ['reception', 'admin', 'nurse', 'officenurse', 'office']
     if WIN_USERNAME.lower() in SHARED_ACCOUNTS:
         login = LoginDialog()
-        if login.exec() == QDialog.DialogCode.Accepted:
+        if login.exec() == QDialog.Accepted:
             new_name = login.get_name()
             if new_name:
                 save_last_username(new_name)
