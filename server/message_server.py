@@ -494,13 +494,17 @@ async def _handle_message(sender: str, data: dict):
                     if orig_sender not in members:
                         members.append(orig_sender)
 
-            recipients = []
+            # Ensure all base members are included so offline members get the message when they log in
+            recipients = list(members)
             for active_full_id in mgr.active.keys():
                 parts = active_full_id.split("|")
                 logic_id = parts[0]
                 win_user = parts[2] if len(parts) > 2 else ""
+                
+                # If this active connection matches a group member by logic_id or win_user, add their specific logic_id to recipients
                 if any(logic_id.lower() == m.lower() for m in members) or (win_user and any(win_user.lower() == m.lower() for m in members)):
-                    recipients.append(logic_id)
+                    if logic_id not in recipients:
+                        recipients.append(logic_id)
                     
             recipients = list(set(recipients))
             
