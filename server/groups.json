@@ -1,14 +1,34 @@
 {
   "Doctors": [
-    "david", "andrew", "hielke", "jess", "joshua", "laurens", "lorna", "maura", "roland", "suea", "suzie", "vicky", "preet"
+    "david",
+    "andrew",
+    "hielke",
+    "jess",
+    "joshua",
+    "laurens",
+    "lorna",
+    "marlies",
+    "maura",
+    "roland",
+    "suea",
+    "suzie",
+    "vicky",
+    "preet"
   ],
-
   "Management": [
     "david",
     "ander"
   ],
-
-  "nurses": ["nurse", "officenurse", "barbara", "dana", "rienie"],
-  "Admin": ["reception", "office", "admin"]
+  "nurses": [
+    "nurse",
+    "officenurse",
+    "barbara",
+    "dana",
+    "rienie"
+  ],
+  "Admin": [
+    "reception",
+    "office",
+    "admin"
+  ]
 }
-
