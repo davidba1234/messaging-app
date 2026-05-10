@@ -12,8 +12,8 @@ import time
 import socket
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-
-
+import ctypes
+import ctypes.wintypes
 
 try:
     from zoneinfo import ZoneInfo
@@ -340,8 +340,16 @@ class PopupNotification(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # Main Window
 # ═══════════════════════════════════════════════════════════════
+
+NOTIFY_FOR_THIS_SESSION = 0
+WM_WTSSESSION_CHANGE = 0x02B1
+WTS_CONSOLE_CONNECT = 0x1
+WTS_CONSOLE_DISCONNECT = 0x2
+WTS_SESSION_LOCK = 0x7
+WTS_SESSION_UNLOCK = 0x8
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -365,6 +373,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_tray()
+        self._register_session_notifications()
         self._start_ws()
 
     # ── build UI ─────────────────────────────────────────────
@@ -541,6 +550,40 @@ class MainWindow(QMainWindow):
 
     # ── websocket ────────────────────────────────────────────
 
+    def _register_session_notifications(self):
+        try:
+            hwnd = int(self.winId())
+            ctypes.windll.wtsapi32.WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION)
+        except Exception as e:
+            print(f"Could not register session notification: {e}")
+
+    def nativeEvent(self, eventType, message):
+        try:
+            msg = ctypes.wintypes.MSG.from_address(message.__int__())
+            if msg.message == WM_WTSSESSION_CHANGE:
+                event_type = msg.wParam
+                if event_type in (WTS_SESSION_LOCK, WTS_CONSOLE_DISCONNECT):
+                    self._on_session_suspended()
+                elif event_type in (WTS_SESSION_UNLOCK, WTS_CONSOLE_CONNECT):
+                    self._on_session_resumed()
+        except Exception as e:
+            pass
+        return super().nativeEvent(eventType, message)
+
+    def _on_session_suspended(self):
+        self._session_locked = True
+        if hasattr(self, 'ws') and self.ws:
+            self.ws.stop()
+            self.ws.wait(1000)
+            self.ws = None
+        self.status.setText("💤 Session Locked")
+        self.status.setStyleSheet("color:#888;")
+
+    def _on_session_resumed(self):
+        self._session_locked = False
+        if not hasattr(self, 'ws') or not self.ws:
+            self._start_ws()
+
     def _start_ws(self):
         self.ws = WebSocketThread()
         self.ws.message_received.connect(self._on_msg)
@@ -549,6 +592,8 @@ class MainWindow(QMainWindow):
         self.ws.start()
 
     def _set_conn(self, ok: bool):
+        if hasattr(self, '_session_locked') and self._session_locked:
+            return
         if ok:
             self.status.setText("🟢  Connected")
             self.status.setStyleSheet("color:#34a853;")
