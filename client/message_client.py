@@ -373,8 +373,11 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_tray()
-        self._register_session_notifications()
         self._start_ws()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._register_session_notifications()
 
     # ── build UI ─────────────────────────────────────────────
 
@@ -559,7 +562,8 @@ class MainWindow(QMainWindow):
 
     def nativeEvent(self, eventType, message):
         try:
-            msg = ctypes.wintypes.MSG.from_address(message.__int__())
+            addr = int(message)
+            msg = ctypes.wintypes.MSG.from_address(addr)
             if msg.message == WM_WTSSESSION_CHANGE:
                 event_type = msg.wParam
                 if event_type in (WTS_SESSION_LOCK, WTS_CONSOLE_DISCONNECT):
@@ -1257,6 +1261,13 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    from PyQt5.QtCore import QSharedMemory
+    shared_mem = QSharedMemory(f"OfficeMessengerApp_{WIN_USERNAME}")
+    if not shared_mem.create(1):
+        QMessageBox.warning(None, "Office Messenger", "Office Messenger is already running on this account. Please check your system tray to open it, or use Switch User within the app.")
+        sys.exit(0)
+
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Office Messenger")
     app.setStyle("Fusion")
