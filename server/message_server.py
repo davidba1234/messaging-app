@@ -303,15 +303,24 @@ class ConnectionManager:
     async def connect(self, username: str, ws: WebSocket):
         await ws.accept()
         
-        # Check for multiple logins
-        if username in self.active:
-            old_ws = self.active[username]
-            try:
-                await old_ws.send_json({"type": "error", "message": "Logged in from another location"})
-                await old_ws.close()
-            except Exception:
-                pass
-            logger.info(f"[!] Closed older connection for {username}")
+        logic_user = get_logic_id(username)
+        parts = username.split("|")
+        new_pc = parts[1] if len(parts) > 1 else "another workstation"
+
+        # Check for multiple logins by logical username and close older connections
+        existing_keys = [k for k in list(self.active.keys()) if get_logic_id(k).lower() == logic_user.lower()]
+        for old_key in existing_keys:
+            old_ws = self.active.pop(old_key, None)
+            if old_ws:
+                try:
+                    await old_ws.send_json({
+                        "type": "session_replaced",
+                        "message": f"Logged in from {new_pc}"
+                    })
+                    await old_ws.close()
+                except Exception:
+                    pass
+                logger.info(f"[!] Closed older connection {old_key} for logical user {logic_user}")
         
         self.active[username] = ws
         await db_register_user(username)
@@ -320,9 +329,10 @@ class ConnectionManager:
         await self._flush_queue(username)
 
     async def disconnect(self, username: str):
-        self.active.pop(username, None)
-        logger.info(f"[-] {username} disconnected  ({len(self.active)} online)")
-        await self.broadcast_user_list()
+        if username in self.active:
+            self.active.pop(username, None)
+            logger.info(f"[-] {username} disconnected  ({len(self.active)} online)")
+            await self.broadcast_user_list()
 
     # ── send helpers ─────────────────────────────────────────
 
@@ -470,6 +480,8 @@ async def _handle_message(sender: str, data: dict):
         return
 
     logic_sender = get_logic_id(sender)
+    parts_sender = sender.split("|")
+    win_user_sender = parts_sender[2] if len(parts_sender) > 2 else ""
 
     if group_name:
         current_groups = get_groups()
@@ -515,6 +527,18 @@ async def _handle_message(sender: str, data: dict):
                  await mgr.send_to(sender, {"type": "message_sent", "group_name": group_name, "status": "sent"})
                  return
                  
+            # Check if the sender is a nurse (so they receive their own message back)
+            nurses_group = get_groups().get("nurses", [])
+            nurses_lower = {n.lower() for n in nurses_group}
+            nurses_lower.update({"nurse", "officenurse"})
+            
+            is_nurse_sender = (
+                logic_sender.lower() in nurses_lower or 
+                (win_user_sender and win_user_sender.lower() in nurses_lower)
+            )
+            
+            exclude_id = None if is_nurse_sender else sender
+
             for member in recipients:
                 ok = await mgr.send_to_logic(member, {
                     "type": "message", "id": msg_id,
@@ -523,7 +547,7 @@ async def _handle_message(sender: str, data: dict):
                     "group_name": group_name, "content": content,
                     "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
                     "parent_id": parent_id,
-                }, exclude_full_id=sender)
+                }, exclude_full_id=exclude_id)
                 
                 # Exclude the exact sending connection from being marked "delivered" if it's the sender
                 if ok and (member != logic_sender or len(recipients) > 1):

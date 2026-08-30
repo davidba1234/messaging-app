@@ -156,6 +156,7 @@ class WebSocketThread(QThread):
     message_received = pyqtSignal(dict)
     connected        = pyqtSignal()
     disconnected     = pyqtSignal()
+    session_replaced = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -187,7 +188,13 @@ class WebSocketThread(QThread):
 
     def _on_message(self, ws, raw):
         try:
-            self.message_received.emit(json.loads(raw))
+            data = json.loads(raw)
+            if data.get("type") == "session_replaced":
+                self._running = False
+                msg = data.get("message", "Logged in from another location")
+                self.session_replaced.emit(msg)
+                return
+            self.message_received.emit(data)
         except json.JSONDecodeError:
             pass
 
@@ -366,10 +373,12 @@ class MainWindow(QMainWindow):
         self.current_chat: str | None = None
         self.chat_is_group = False
         self.current_reply_parent: int | None = None
+        self._setting_reply_parent = False
         self.collapsed_threads: set[int] = set()
         self.dm_messages: list[dict] = []
         self.group_messages: list[dict] = []
         self.popups: list[PopupNotification] = []
+        self._session_replaced = False
 
         self._build_ui()
         self._build_tray()
@@ -589,22 +598,40 @@ class MainWindow(QMainWindow):
             self._start_ws()
 
     def _start_ws(self):
+        self._session_replaced = False
         self.ws = WebSocketThread()
         self.ws.message_received.connect(self._on_msg)
         self.ws.connected.connect(lambda: self._set_conn(True))
         self.ws.disconnected.connect(lambda: self._set_conn(False))
+        self.ws.session_replaced.connect(self._on_session_replaced)
         self.ws.start()
 
     def _set_conn(self, ok: bool):
-        if hasattr(self, '_session_locked') and self._session_locked:
+        if getattr(self, '_session_locked', False):
+            return
+        if getattr(self, '_session_replaced', False):
             return
         if ok:
             self.status.setText("🟢  Connected")
             self.status.setStyleSheet("color:#34a853;")
             self.ws.send({"type": "history_request", "with_global": True})
+            self._update_send_permission()
         else:
             self.status.setText("🔴  Disconnected — reconnecting…")
             self.status.setStyleSheet("color:#ea4335;")
+
+    def _on_session_replaced(self, reason: str):
+        self._session_replaced = True
+        self.status.setText(f"⚠️ Disconnected — {reason}")
+        self.status.setStyleSheet("color:#e67e22;font-weight:bold;")
+        self._update_send_permission()
+        if hasattr(self, 'tray') and self.tray:
+            self.tray.showMessage(
+                "Office Messenger",
+                f"Logged out on this PC ({reason}).\nClick 'Switch User' to log back in here.",
+                QSystemTrayIcon.Warning,
+                6000
+            )
 
     # ── contact selection ────────────────────────────────────
 
@@ -694,6 +721,16 @@ class MainWindow(QMainWindow):
         self._update_ad_hoc_selection()
 
     def _update_send_permission(self):
+        if getattr(self, '_session_replaced', False):
+            self.send_btn.setEnabled(False)
+            self.msg_input.setEnabled(False)
+            self.msg_input.setPlaceholderText("Session disconnected (active elsewhere). Use 'Switch User' to reconnect.")
+            return
+        if getattr(self, '_session_locked', False):
+            self.send_btn.setEnabled(False)
+            self.msg_input.setEnabled(False)
+            self.msg_input.setPlaceholderText("Session locked.")
+            return
         if self.chat_is_group:
             self.send_btn.setEnabled(True)
             self.msg_input.setEnabled(True)
@@ -721,10 +758,12 @@ class MainWindow(QMainWindow):
             self.chat_is_group = False
             self.send_btn.setEnabled(False)
             self.msg_input.setEnabled(False)
-            self._set_reply_parent(None)
+            if not self._setting_reply_parent:
+                self._set_reply_parent(None)
             return
 
-        self._set_reply_parent(None)
+        if not self._setting_reply_parent:
+            self._set_reply_parent(None)
         
         if len(checked_full_ids) == 1:
             full_id = checked_full_ids[0]
@@ -774,20 +813,35 @@ class MainWindow(QMainWindow):
         if msg_id is None:
             self.reply_indicator_widget.hide()
             self.send_btn.setText("New Thread  📤" if self.chat_is_group else "Send  📤")
+            self.tree.setEnabled(True)
+            self.switch_user_btn.setEnabled(True)
+            self._update_send_permission()
         else:
-            orig = next((m for m in self.dm_messages + self.group_messages if m["id"] == msg_id), None)
-            sender = orig["sender"] if orig else "thread"
-            if "|" in sender: sender = sender.split("|", 1)[0]
-            self.reply_label.setText(f"Replying to {sender}'s thread")
-            self.reply_indicator_widget.show()
-            self.send_btn.setText("Reply  📤")
-            self.msg_input.setFocus()
-            
-            if orig:
-                if orig.get("group_name"):
-                    self.tabs.setCurrentIndex(1)
-                else:
-                    self.tabs.setCurrentIndex(0)
+            self._setting_reply_parent = True
+            try:
+                orig = next((m for m in self.dm_messages + self.group_messages if m["id"] == msg_id), None)
+                sender = orig["sender"] if orig else "thread"
+                if "|" in sender: sender = sender.split("|", 1)[0]
+                self.reply_label.setText(f"Replying to {sender}'s thread")
+                self.reply_indicator_widget.show()
+                self.send_btn.setText("Reply  📤")
+                self.msg_input.setFocus()
+
+                # Switch view and select target contact/group
+                if orig:
+                    grp = orig.get("group_name")
+                    if grp:
+                        self.select_group(grp)
+                        self.tabs.setCurrentIndex(1)
+                    else:
+                        orig_sender = orig["sender"]
+                        self.select_contact(orig_sender, activate=False)
+                        self.tabs.setCurrentIndex(0)
+            finally:
+                self._setting_reply_parent = False
+
+            self.tree.setEnabled(False)
+            self.switch_user_btn.setEnabled(False)
             
     def _on_anchor_clicked(self, url):
         target = url.toString()
@@ -990,20 +1044,27 @@ class MainWindow(QMainWindow):
         content   = data["content"]
         msg_id    = data["id"]
         grp       = data.get("group_name")
+        parent_id = data.get("parent_id")
 
-        if grp:
-            self.group_messages.append(data)
-            self._render_chat(self.group_view, self.group_messages)
-        else:
-            self.dm_messages.append(data)
-            self._render_chat(self.dm_view, self.dm_messages)
+        target_list = self.group_messages if grp else self.dm_messages
+        target_view = self.group_view if grp else self.dm_view
+
+        replaced = False
+        sender_logic = sender_raw.split("|")[0] if "|" in sender_raw else sender_raw
+        if sender_logic == USERNAME:
+            for idx, msg in enumerate(target_list):
+                if msg["id"] < 0 and msg["content"] == content and msg.get("parent_id") == parent_id:
+                    target_list[idx] = data
+                    replaced = True
+                    break
+
+        if not replaced:
+            target_list.append(data)
+            
+        self._render_chat(target_view, target_list)
             
         if self.status.text() == f"✍️ {sender_raw} is typing a reply":
             self.status.setText("")
-            
-        parent_id = data.get("parent_id")
-        if parent_id is not None and grp:
-            return 
             
         self._popup(sender_raw, content, msg_id, grp)
 
@@ -1168,11 +1229,15 @@ class MainWindow(QMainWindow):
 
     def select_contact(self, username, activate=True):
         found_item = None
+        username_logic = username.split("|")[0] if "|" in username else username
+        
         for i in range(1, self.tree.topLevelItemCount()):
             tli = self.tree.topLevelItem(i)
             for j in range(tli.childCount()):
                 child = tli.child(j)
-                if child.text(0) == username or child.data(0, Qt.UserRole) == username:
+                child_role = child.data(0, Qt.UserRole)
+                child_logic = child_role.split("|")[0] if child_role and "|" in child_role else child_role
+                if (child_logic and child_logic.lower() == username_logic.lower()) or (child_role and child_role.lower() == username.lower()):
                     found_item = child
                     break
             if found_item: break
@@ -1184,17 +1249,53 @@ class MainWindow(QMainWindow):
         if activate:
             self._raise()
 
-    def _jump_to(self, username: str, group_name: str = None, msg_id: int = None):
-        if group_name:
-            found_item = None
+    def select_ad_hoc(self, members: list[str]):
+        # Uncheck everything first
+        self.tree.blockSignals(True)
+        for i in range(self.tree.topLevelItemCount()):
+            tli = self.tree.topLevelItem(i)
+            tli.setCheckState(0, Qt.Unchecked)
+            for j in range(tli.childCount()):
+                tli.child(j).setCheckState(0, Qt.Unchecked)
+        
+        # Check matching members
+        for member in members:
             for i in range(1, self.tree.topLevelItemCount()):
                 tli = self.tree.topLevelItem(i)
-                if tli.data(0, Qt.UserRole) == f"CAT:{group_name}":
+                for j in range(tli.childCount()):
+                    child = tli.child(j)
+                    child_role = child.data(0, Qt.UserRole)
+                    child_logic = child_role.split("|")[0] if child_role and "|" in child_role else child_role
+                    if child_logic and child_logic.lower() == member.lower():
+                        child.setCheckState(0, Qt.Checked)
+        self.tree.blockSignals(False)
+        self._update_ad_hoc_selection()
+
+    def select_group(self, group_name: str):
+        if group_name.startswith("AdHoc|"):
+            members = group_name.split("|")[1].split(",")
+            self.select_ad_hoc(members)
+            return
+            
+        found_item = None
+        for i in range(self.tree.topLevelItemCount()):
+            tli = self.tree.topLevelItem(i)
+            if group_name.lower() == "everyone" and "everyone" in tli.text(0).lower():
+                found_item = tli
+                break
+            tli_role = tli.data(0, Qt.UserRole)
+            if tli_role and tli_role.startswith("CAT:"):
+                tli_group = tli_role.split(":", 1)[1]
+                if tli_group.lower() == group_name.lower():
                     found_item = tli
                     break
-            if found_item:
-                self.tree.setCurrentItem(found_item)
-                self._tree_item_clicked(found_item, 0)
+        if found_item:
+            self.tree.setCurrentItem(found_item)
+            self._tree_item_clicked(found_item, 0)
+
+    def _jump_to(self, username: str, group_name: str = None, msg_id: int = None):
+        if group_name:
+            self.select_group(group_name)
         else:
             self.select_contact(username, activate=False)
 
