@@ -204,7 +204,7 @@ async def db_get_group_history(group_name: str, limit: int = 100) -> list[dict]:
         async with conn.execute("""
             SELECT id, sender, group_name, content, timestamp, parent_id
             FROM messages
-            WHERE group_name = ? AND timestamp >= ?
+            WHERE group_name = ? COLLATE NOCASE AND timestamp >= ?
             ORDER BY timestamp DESC
             LIMIT ?
         """, (group_name, today_start, limit)) as cursor:
@@ -248,9 +248,9 @@ async def db_get_global_group_history(logic_user: str, win_user: str = "", limit
             LEFT JOIN message_recipients r ON m.id = r.msg_id
             WHERE m.timestamp >= ? AND m.group_name IS NOT NULL
               AND (
-                 m.group_name IN ({placeholders})
-                 OR r.recipient = ?
-                 OR m.sender = ?
+                 m.group_name IN ({placeholders}) COLLATE NOCASE
+                 OR r.recipient = ? COLLATE NOCASE
+                 OR m.sender = ? COLLATE NOCASE
               )
             GROUP BY m.id
             ORDER BY m.timestamp DESC
@@ -277,13 +277,14 @@ def get_groups():
 
 
 async def resolve_group_members(group_name: str) -> list[str]:
-    if group_name == "Everyone":
+    if group_name.lower() == "everyone":
         all_users = await db_all_users()
         return list(set(get_logic_id(u) for u in all_users))
     groups = get_groups()
-    if group_name not in groups:
+    matched_key = next((k for k in groups if k.lower() == group_name.lower()), None)
+    if not matched_key:
         return []
-    members = groups[group_name]
+    members = groups[matched_key]
     if "*" in members:
         all_users = await db_all_users()
         return list(set(get_logic_id(u) for u in all_users))      # Everyone
@@ -485,12 +486,21 @@ async def _handle_message(sender: str, data: dict):
 
     if group_name:
         current_groups = get_groups()
-        if group_name == "Everyone" or group_name in current_groups:
-            members = await resolve_group_members(group_name)
+        canonical_group = next((k for k in current_groups if k.lower() == group_name.lower()), None)
+        if group_name.lower() == "everyone":
+            canonical_group = "Everyone"
+            members = await resolve_group_members("Everyone")
+        elif canonical_group:
+            members = await resolve_group_members(canonical_group)
         elif group_name.startswith("AdHoc|"):
+            canonical_group = group_name
             members = group_name.split("|")[1].split(",")
         else:
+            logger.warning(f"[!] Unknown group message target: {group_name} from {sender}")
+            await mgr.send_to(sender, {"type": "error", "message": f"Group '{group_name}' not found."})
             return
+
+        group_name = canonical_group
 
         if True:
             # ── Group message → fan-out ──
@@ -528,7 +538,7 @@ async def _handle_message(sender: str, data: dict):
                  return
                  
             # Check if the sender is a nurse (so they receive their own message back)
-            nurses_group = get_groups().get("nurses", [])
+            nurses_group = next((v for k, v in get_groups().items() if k.lower() == "nurses"), [])
             nurses_lower = {n.lower() for n in nurses_group}
             nurses_lower.update({"nurse", "officenurse"})
             
@@ -635,35 +645,46 @@ async def _handle_history(sender: str, data: dict):
     group = data.get("with_group")
     if group:
         current_groups = get_groups()
-        if group == "Everyone" or group in current_groups or group.startswith("AdHoc|"):
-            if group.startswith("AdHoc|"):
-                members = group.split("|")[1].split(",")
-            else:
-                members = await resolve_group_members(group)
-                
-            is_member = any(m.lower() == logic_user.lower() for m in members) or (win_user and any(m.lower() == win_user.lower() for m in members))
+        canonical_group = next((k for k in current_groups if k.lower() == group.lower()), None)
+        if group.lower() == "everyone":
+            canonical_group = "Everyone"
+            members = await resolve_group_members("Everyone")
+        elif canonical_group:
+            members = await resolve_group_members(canonical_group)
+        elif group.startswith("AdHoc|"):
+            canonical_group = group
+            members = group.split("|")[1].split(",")
+        else:
+            canonical_group = None
+            members = []
             
-            if not is_member:
-                await mgr.send_to(sender, {
-                    "type":       "history_response",
-                    "with_group": group,
-                    "messages":   [{
-                        "id": -1,
-                        "sender": "System",
-                        "group_name": group,
-                        "content": "You are not a member of this group. Chat history is hidden.",
-                        "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
-                        "parent_id": None
-                    }],
-                })
-                return
+        if not canonical_group:
+            return
 
-            history = await db_get_group_history(group)
+        group = canonical_group
+        is_member = any(m.lower() == logic_user.lower() for m in members) or (win_user and any(m.lower() == win_user.lower() for m in members))
+        
+        if not is_member:
             await mgr.send_to(sender, {
                 "type":       "history_response",
                 "with_group": group,
-                "messages":   history,
+                "messages":   [{
+                    "id": -1,
+                    "sender": "System",
+                    "group_name": group,
+                    "content": "You are not a member of this group. Chat history is hidden.",
+                    "timestamp": datetime.now(AUCKLAND_TZ).isoformat(),
+                    "parent_id": None
+                }],
             })
+            return
+
+        history = await db_get_group_history(group)
+        await mgr.send_to(sender, {
+            "type":       "history_response",
+            "with_group": group,
+            "messages":   history,
+        })
         return
 
     other = data.get("with_user")

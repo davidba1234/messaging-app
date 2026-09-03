@@ -24,7 +24,7 @@ messaging-app/
 │   ├── message_server.py          # FastAPI/WebSocket server with aiosqlite/sqlite3 backend
 │   ├── messenger.db               # SQLite database (users, messages, delivery statuses)
 │   ├── locations.json             # Workstation hostname -> Room name mapping
-│   ├── groups.json                # User group definitions (Doctors, nurses, Admin, etc.)
+│   ├── groups.json                # User group definitions (Doctors, Nurses, Admin, etc.)
 │   ├── delete_user.py             # Utility to remove a user from the database
 │   ├── Dockerfile                 # Docker configuration for Linux VM deployment
 │   ├── docker-compose.yml         # Container compose config with volume mounts
@@ -50,9 +50,9 @@ messaging-app/
 - **Protocol**: WebSocket endpoint at `/ws/{UNIQUE_ID}` and REST endpoints (`/health`, `/locations`).
 - **Database**: SQLite (`server/messenger.db`) using `aiosqlite` for async operations.
   - **Tables**: `users` (usernames, timestamps), `messages` (id, sender, group, content, parent_id, timestamp), `message_recipients` (msg_id, recipient, status).
-  - **Timezone**: All timestamps use `Pacific/Auckland` timezone.
+- **Timezone**: All timestamps use `Pacific/Auckland` timezone.
 - **Offline Message Queue**: If a recipient is offline, messages are stored with status `'sent'`. When the user reconnects, queued messages are automatically pushed and marked as `'delivered'`.
-- **User Groups (`server/groups.json`)**: Predefined role groups (`Doctors`, `Management`, `nurses`, `Admin`).
+- **User Groups (`server/groups.json`)**: Predefined role groups (`Doctors`, `Management`, `Nurses`, `Admin`).
 - **Workstation Locations (`server/locations.json`)**: Maps PC hostnames (e.g., `KMC114PC`, `KMC068PC`) to room names (e.g., `Prep Room`, `Room 1`).
 
 ### B. Client (`client/message_client.py`)
@@ -76,7 +76,7 @@ messaging-app/
 
 ### B. Updating User Groups (`groups.json`)
 1. Edit `server/groups.json`.
-2. Add or remove usernames under the appropriate group category (`Doctors`, `nurses`, `Admin`, `Management`).
+2. Add or remove usernames under the appropriate group category (`Doctors`, `Nurses`, `Admin`, `Management`).
 3. Push to GitHub and sync the server VM.
 
 ### C. Building & Deploying the Windows Client (`.exe`)

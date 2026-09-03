@@ -955,7 +955,7 @@ class MainWindow(QMainWindow):
         everyone.setCheckState(0, Qt.Unchecked)
         self.tree.addTopLevelItem(everyone)
 
-        cats = ["Doctors", "nurses", "Admin", "Management"]
+        cats = ["Doctors", "Nurses", "Admin", "Management"]
         inserted_logic_ids = set()
         
         for cat in cats + ["Other"]:
@@ -970,8 +970,8 @@ class MainWindow(QMainWindow):
                         other_logic_ids.add(l_id.lower())
                         cat_users.append(l_id)
             else:
-                cat_users = self.categorized.get(cat, [])
-                if not cat_users and cat not in ["Doctors", "nurses", "Admin"]: continue
+                cat_users = next((v for k, v in self.categorized.items() if k.lower() == cat.lower()), [])
+                if not cat_users and cat not in ["Doctors", "Nurses", "Admin"]: continue
                 for c in cat_users:
                     inserted_logic_ids.add(c.lower())
                 
@@ -994,7 +994,7 @@ class MainWindow(QMainWindow):
                             break
                     matching_full_ids.append(offline_match if offline_match else logic)
 
-            display_cat = cat.capitalize() if cat == "nurses" else cat
+            display_cat = cat
             cat_item = QTreeWidgetItem([f"📁 {display_cat}"])
             cat_item.setData(0, Qt.UserRole, f"CAT:{display_cat}")
             cat_item.setFlags(cat_item.flags() | Qt.ItemIsUserCheckable)
