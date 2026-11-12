@@ -1,10 +1,19 @@
 # 1. Setup Paths
+$repoRoot = Split-Path -Parent $PSScriptRoot
 $pythonScript = "H:\mydocs\OfficeMessenger\messaging-app\client\message_client.py"
 $localOutputDir = "H:\mydocs\OfficeMessenger\messaging-app\client\output"
 $networkDestination = "N:\OfficeMessenger"
 $versionFile = "H:\mydocs\OfficeMessenger\messaging-app\client\file_version_info.txt"
 $venvActivate = ".\venv\Scripts\Activate.ps1"
 $compiler = ".\venv\Scripts\pyinstaller.exe"
+
+# 1b. Pull Latest Changes from GitHub
+Write-Host "Pulling latest changes from GitHub..." -ForegroundColor Cyan
+git -C $repoRoot pull origin main
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: git pull failed. Resolve any issues before building." -ForegroundColor Red
+    exit 1
+}
 
 # 2. Activate Virtual Environment
 if (Test-Path $venvActivate) {
@@ -47,6 +56,15 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "Cleaning up build artifacts..." -ForegroundColor Gray
     if (Test-Path ".\build") { Remove-Item -Path ".\build" -Recurse -Force }
     if (Test-Path ".\message_client.spec") { Remove-Item -Path ".\message_client.spec" -Force }
+
+    # Commit and push bumped version
+    Write-Host "Pushing version $newVersion to GitHub..." -ForegroundColor Cyan
+    git -C $repoRoot add "client/file_version_info.txt"
+    git -C $repoRoot commit -m "Bump client version to $newVersion"
+    git -C $repoRoot push origin main
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: Deployed $newVersion, but git push failed." -ForegroundColor Yellow
+    }
 
     # Fixed Windows Notification
     $msg = "OfficeMessenger $newVersion deployed to N: drive"
