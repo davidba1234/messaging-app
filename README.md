@@ -1,9 +1,10 @@
 # Office Messenger
 
-Office Messenger is a real-time, lightweight client-server messaging application designed for local and corporate networks. It features a FastAPI/WebSocket server with an SQLite backend, and a rich desktop client built with PyQt6. This README covers the architecture and deployment steps for both the server and the client.
+Office Messenger is a real-time, lightweight client-server messaging application designed for local and corporate networks. It features a FastAPI/WebSocket server with an SQLite backend, and a rich desktop client built with PyQt5. This README covers the architecture, deployment, and GitHub sync workflow for both the server and the client.
 
 ## Table of Contents
 - [System Architecture](#system-architecture)
+- [Keeping the System Up to Date (GitHub Sync Workflow)](#keeping-the-system-up-to-date-github-sync-workflow)
 - [Server Deployment (Linux VM)](#server-deployment-linux-vm)
 - [Client Deployment (Windows executable)](#client-deployment-windows-executable)
 - [License](#license)
@@ -14,7 +15,7 @@ The application is split into two independent parts:
 
 ### How the System Works
 1. **Server (`message_server.py`)**: A centralized FastAPI server acts as the message broker. It listens for WebSocket connections on port `8765`. All messages sent by a client go to the server, which then routes them to the intended recipient(s). If a recipient is offline, the message is queued in the SQLite database and delivered when they reconnect.
-2. **Client (`message_client.py`)**: A PyQt6 desktop application running on user machines. It maintains a persistent WebSocket connection to the server. It reads the server's location from a local `messenger_config.ini` file.
+2. **Client (`message_client.py`)**: A PyQt5 desktop application running on user machines. It maintains a persistent WebSocket connection to the server. It reads the server's location from a local `messenger_config.ini` file.
 3. **Database (`messenger.db`)**: An SQLite database automatically maintained by the server to store users, message histories, and delivery statuses.
 4. **Groups (`groups.json`)**: A configuration file read by the server to determine group memberships.
 
@@ -28,7 +29,7 @@ The application is split into two independent parts:
 - **Dockerized:** Packaged with a `Dockerfile` and `docker-compose.yml` for straightforward, reproducible deployments.
 
 ### 2. Client (`message_client.py`)
-- **Frameworks:** A desktop GUI application built with **PyQt6** and `websocket-client`.
+- **Frameworks:** A desktop GUI application built with **PyQt5** and `websocket-client`.
 - **Configuration:** Reads the server's IP address from a configuration file `messenger_config.ini` in the user's home directory.
 - **Multi-threaded Operations:** Uses a background `QThread` to maintain the WebSocket connection without freezing or lagging the GUI.
 - **Rich Notifications:** Sits in the system tray and displays temporary, non-intrusive pop-up notifications (bottom right) when new messages arrive while the app is unfocused.
@@ -138,6 +139,58 @@ Groups are managed centrally on the server via the `groups.json` file. The clien
     - If using Docker: `docker compose restart`
     - If running directly: Stop the script (`Ctrl+C`) and start it again.
 
+
+---
+
+## Keeping the System Up to Date (GitHub Sync Workflow)
+
+GitHub (`davidba1234/messaging-app`, branch `main`) is the central source of truth between your development machine (NUC), the Linux server VM, and the Windows client build folder.
+
+### 1. Making Code Changes (on the NUC)
+Before editing, pull the latest changes (including any version bumps from Windows client builds):
+```bash
+git pull origin main
+```
+After making and testing your changes, commit and push them to GitHub:
+```bash
+git add <changed-files>
+git commit -m "Describe your change"
+git push origin main
+```
+
+### 2. Updating the Server (Linux VM `10.0.1.247`)
+Whenever `server/` files (such as `message_server.py`, `groups.json`, or `locations.json`) are updated on GitHub:
+1. Connect to the work VPN from the NUC:
+   ```bash
+   sudo systemctl start netbird
+   sudo netbird up --disable-dns
+   ```
+2. SSH into the server VM:
+   ```bash
+   ssh -p 2270 david@10.0.1.247
+   ```
+3. Run the sync command, which pulls `origin/main` into `/opt/office-messenger/server` and rebuilds/restarts the Docker container:
+   ```bash
+   messenger-sync
+   ```
+4. Exit the VM and disconnect NetBird when finished:
+   ```bash
+   exit
+   sudo netbird down
+   ```
+
+### 3. Updating the Client (Windows PC)
+Because PyInstaller on Linux cannot cross-compile a Windows `.exe`, the client executable is built on a Windows PC:
+1. On the work Windows PC, open `H:\mydocs\OfficeMessenger\messaging-app\client\`.
+2. Double-click **`Runcompilescript.bat`** (which runs `build_and_deploy.ps1`).
+3. The script automatically:
+   - Pulls the latest code from GitHub (`git pull origin main`).
+   - Increments the version number in `client/file_version_info.txt`.
+   - Compiles `message_client.py` into `message_client.exe` using the Windows `venv`.
+   - Copies the new `message_client.exe` to `N:\OfficeMessenger\message_client.exe` for users.
+   - Commits and pushes the updated `client/file_version_info.txt` back to GitHub.
+
+---
 
 ## License
 This project is licensed under the MIT License.
